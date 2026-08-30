@@ -1,5 +1,7 @@
 # Public Edge Manager
 
+[![Artifact Hub](https://img.shields.io/endpoint?url=https://artifacthub.io/badge/repository/public-edge-manager)](https://artifacthub.io/packages/search?repo=public-edge-manager)
+
 This chart packages the `PublicEdge` inventory, health authority and DNS answer
 service as one application. It does not write Cloudflare records directly.
 ExternalDNS remains the publication executor for NS/glue ownership, while this
