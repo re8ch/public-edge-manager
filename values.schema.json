@@ -18,6 +18,15 @@
     "services": { "type": "object" },
     "publicEdges": { "type": "array" },
     "readinessGates": { "type": "object" },
+    "workload": {
+      "type": "object",
+      "properties": {
+        "hostNetwork": { "type": "boolean" },
+        "dnsPort": { "type": "integer", "minimum": 1, "maximum": 65535 },
+        "httpPort": { "type": "integer", "minimum": 1, "maximum": 65535 },
+        "containerSecurityContext": { "type": "object" }
+      }
+    },
     "dns": {
       "type": "object",
       "required": ["soaRname"],
