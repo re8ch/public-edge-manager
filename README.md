@@ -17,7 +17,8 @@ does not require code or ConfigMaps from a separate private repository.
 3. Capacity, priority, application latency, and a small node-local preference
    provide deterministic ordering inside an area.
 4. DNS A or CNAME answers publish the best equally scored candidates.
-5. An optional legacy mode updates explicitly named ExternalDNS-only Ingresses.
+5. Optional named publication adapters update provider-scoped ExternalDNS-only
+   Ingresses with the selected edge.
 
 Public Edge Manager does not configure routers, NAT, BGP, certificates, or
 application Gateways. Those remain explicit operator-owned infrastructure.
@@ -51,8 +52,45 @@ The chart creates two Services:
   HTTP API on port 8080.
 
 Ingress mutation is disabled by default. Enable `publication.enabled` and
-`rbac.mutateIngresses` together only for the legacy ExternalDNS publication
-mode. Normal delegated authoritative DNS requires read-only Ingress access.
+`rbac.mutateIngresses` together only for provider publication. Normal delegated
+authoritative DNS requires read-only Ingress access.
+
+### Multiple DNS publication adapters
+
+Public Edge Manager can fan one selected healthy edge out to multiple named,
+provider-scoped publication objects. Each adapter owns separate
+ExternalDNS-only Ingresses, so credentials, zone filters, ownership registries,
+write policies and failure domains remain isolated in the corresponding
+ExternalDNS release:
+
+```yaml
+publication:
+  enabled: true
+  publisherNode: edge-controller-1
+  adapters:
+    alidns:
+      provider: alibabacloud
+      refs:
+        app: {namespace: dns-publication, name: app-alidns}
+    dnspod:
+      provider: tencent-dnspod
+      refs:
+        app: {namespace: dns-publication, name: app-dnspod}
+    esa:
+      enabled: false
+      provider: alibaba-esa
+      refs:
+        app: {namespace: dns-publication, name: app-esa}
+rbac:
+  mutateIngresses: true
+```
+
+The chart deliberately does not mount cloud credentials or call provider APIs.
+Alibaba Cloud DNS uses ExternalDNS's `alibabacloud` provider, Tencent DNSPod
+uses an ExternalDNS webhook, and ESA requires an ESA-capable ExternalDNS webhook
+or controller. Keep an adapter disabled until its executor, credentials and
+ownership policy have been validated. The deprecated `publication.refs` map is
+still accepted as the single `legacy` adapter.
 
 `readinessGates` can fail a sensitive service closed unless JSON authority
 evidence in a ConfigMap agrees with the ready addresses of an EndpointSlice.

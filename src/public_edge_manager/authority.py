@@ -35,6 +35,7 @@ API_GROUP = os.getenv("API_GROUP", "networking.re8ch.com")
 SERVICE_ACCOUNT = "/var/run/secrets/kubernetes.io/serviceaccount"
 PUBLISHER_NODE = os.getenv("PUBLISHER_NODE", "")
 PUBLICATION_REFS = json.loads(os.getenv("PUBLICATION_REFS_JSON", "{}"))
+PUBLICATION_ADAPTERS = json.loads(os.getenv("PUBLICATION_ADAPTERS_JSON", "{}"))
 PUBLICATION_ENABLED = os.getenv("PUBLICATION_ENABLED", "false").lower() == "true"
 READINESS_GATES = json.loads(os.getenv("READINESS_GATES_JSON", "{}"))
 SOA_RNAME = os.getenv("SOA_RNAME", "hostmaster.invalid.")
@@ -287,30 +288,67 @@ def publish_edge_statuses():
 
 
 def publish_default_area():
-    """Update the one ExternalDNS authority object for non-delegated names.
+    """Update provider-scoped publication objects for non-delegated names.
 
     Regional NS answers stay request-area aware. A global DNS A record cannot,
-    so one elected authority publishes its configured area and removes DNS
-    ownership from application Routes.
+    so one elected authority publishes its configured area. Each adapter owns
+    a distinct set of ExternalDNS-only Ingress objects and provider credentials
+    remain outside Public Edge Manager.
     """
     if not PUBLICATION_ENABLED or NODE != PUBLISHER_NODE:
         return
-    for service, ref in PUBLICATION_REFS.items():
-        try:
-            selected = next((item for item in ranked(service) if item["state"] == "ready"), None)
-            if not selected:
-                continue
-            path = f"/apis/networking.k8s.io/v1/namespaces/{ref['namespace']}/ingresses/{ref['name']}"
-            current = kubernetes_get(path)
-            annotations = (current or {}).get("metadata", {}).get("annotations", {})
-            if annotations.get("external-dns.alpha.kubernetes.io/target") == selected["ip"]:
-                continue
-            kubernetes_patch(path, {"metadata": {"annotations": {
-                "external-dns.alpha.kubernetes.io/target": selected["ip"],
-                f"{API_GROUP}/selected-public-edge": selected["id"],
-            }}})
-        except Exception as exc:
-            print(f"publication service={service} error={exc}", flush=True)
+    adapters = PUBLICATION_ADAPTERS or {
+        "legacy": {"provider": "external-dns", "refs": PUBLICATION_REFS}
+    }
+    for adapter_name, adapter in adapters.items():
+        if not adapter.get("enabled", True):
+            continue
+        provider = adapter.get("provider", adapter_name)
+        for service, ref in adapter.get("refs", {}).items():
+            try:
+                selected = next((item for item in ranked(service) if item["state"] == "ready"), None)
+                if not selected:
+                    continue
+                path = f"/apis/networking.k8s.io/v1/namespaces/{ref['namespace']}/ingresses/{ref['name']}"
+                current = kubernetes_get(path)
+                annotations = (current or {}).get("metadata", {}).get("annotations", {})
+                desired = {
+                    "external-dns.alpha.kubernetes.io/target": selected["ip"],
+                    f"{API_GROUP}/selected-public-edge": selected["id"],
+                    f"{API_GROUP}/publication-adapter": adapter_name,
+                    f"{API_GROUP}/dns-provider": provider,
+                }
+                if all(annotations.get(key) == value for key, value in desired.items()):
+                    continue
+                kubernetes_patch(path, {"metadata": {"annotations": desired}})
+            except Exception as exc:
+                print(
+                    f"publication adapter={adapter_name} provider={provider} "
+                    f"service={service} error={exc}", flush=True,
+                )
+
+
+def validate_publication_adapters():
+    """Reject ambiguous sinks before any provider-owned object is mutated."""
+    if not PUBLICATION_ADAPTERS:
+        return
+    claimed = {}
+    known_services = set(SERVICES.values())
+    for adapter_name, adapter in PUBLICATION_ADAPTERS.items():
+        if not adapter.get("enabled", True):
+            continue
+        for service, ref in adapter.get("refs", {}).items():
+            if service not in known_services:
+                raise RuntimeError(
+                    f"publication adapter {adapter_name!r} references unknown service {service!r}"
+                )
+            identity = (ref["namespace"], ref["name"])
+            if identity in claimed:
+                raise RuntimeError(
+                    f"publication object {identity[0]}/{identity[1]} is shared by adapters "
+                    f"{claimed[identity]!r} and {adapter_name!r}"
+                )
+            claimed[identity] = adapter_name
 
 
 def ranked(service):
@@ -502,6 +540,7 @@ def main():
         raise RuntimeError("NAMESERVERS must configure at least one authoritative nameserver")
     if not CANDIDATES and not KUBERNETES_API:
         raise RuntimeError("no PublicEdge API or CANDIDATES_JSON configured")
+    validate_publication_adapters()
     http = ThreadingHTTPServer(("0.0.0.0", HTTP_PORT), HTTPHandler)
     threading.Thread(target=http.serve_forever, daemon=True).start()
     probe_all()

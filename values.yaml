@@ -54,6 +54,11 @@ candidateSelection:
 publication:
   enabled: false
   publisherNode: ""
+  # Named provider adapters may publish the same selected edge through
+  # independent ExternalDNS-only Ingress objects. Credentials and provider
+  # reconciliation remain isolated in their ExternalDNS releases.
+  adapters: {}
+  # Deprecated singleton retained for backwards compatibility.
   refs: {}
 
 rbac:

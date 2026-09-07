@@ -1,0 +1,35 @@
+enabled: true
+nameservers: [ns1.example.com.]
+authorityNodes:
+  edge-controller-1: {bindAddress: 192.0.2.53, area: CN, region: test}
+services:
+  app.example.com.: {service: app, class: web, probePath: /healthz}
+publicEdges:
+  - name: edge-a
+    area: CN
+    region: test
+    nodeName: edge-a
+    enabled: true
+    endpoint: {type: PublicIP, value: 192.0.2.10}
+    gatewayVIP: 10.0.0.10
+    serviceClasses: [web]
+    forwarding: {mode: DirectGateway}
+publication:
+  enabled: true
+  publisherNode: edge-controller-1
+  adapters:
+    alidns:
+      provider: alibabacloud
+      refs:
+        app: {namespace: dns-publication, name: app-alidns}
+    dnspod:
+      provider: tencent-dnspod
+      refs:
+        app: {namespace: dns-publication, name: app-dnspod}
+    esa:
+      enabled: false
+      provider: alibaba-esa
+      refs:
+        app: {namespace: dns-publication, name: app-esa}
+rbac:
+  mutateIngresses: true

@@ -119,6 +119,65 @@ class AuthorityTests(unittest.TestCase):
             authority.publish_default_area()
         get.assert_not_called()
 
+    def test_named_publication_adapters_patch_each_provider_object(self):
+        adapters = {
+            "alidns": {
+                "provider": "alibabacloud",
+                "refs": {"app": {"namespace": "dns", "name": "app-alidns"}},
+            },
+            "dnspod": {
+                "provider": "tencent-dnspod",
+                "refs": {"app": {"namespace": "dns", "name": "app-dnspod"}},
+            },
+        }
+        selected = {"id": "edge-a", "ip": "192.0.2.10", "state": "ready"}
+        with mock.patch.object(authority, "PUBLICATION_ENABLED", True), \
+             mock.patch.object(authority, "NODE", "publisher"), \
+             mock.patch.object(authority, "PUBLISHER_NODE", "publisher"), \
+             mock.patch.object(authority, "PUBLICATION_ADAPTERS", adapters), \
+             mock.patch.object(authority, "ranked", return_value=[selected]), \
+             mock.patch.object(authority, "kubernetes_get", return_value={"metadata": {"annotations": {}}}), \
+             mock.patch.object(authority, "kubernetes_patch") as patch:
+            authority.publish_default_area()
+        self.assertEqual(patch.call_count, 2)
+        paths = {call.args[0] for call in patch.call_args_list}
+        self.assertEqual(paths, {
+            "/apis/networking.k8s.io/v1/namespaces/dns/ingresses/app-alidns",
+            "/apis/networking.k8s.io/v1/namespaces/dns/ingresses/app-dnspod",
+        })
+        annotations = [call.args[1]["metadata"]["annotations"] for call in patch.call_args_list]
+        self.assertEqual({item[f"{authority.API_GROUP}/dns-provider"] for item in annotations}, {
+            "alibabacloud", "tencent-dnspod",
+        })
+
+    def test_disabled_publication_adapter_is_skipped(self):
+        adapters = {
+            "esa": {
+                "enabled": False,
+                "provider": "alibaba-esa",
+                "refs": {"app": {"namespace": "dns", "name": "app-esa"}},
+            }
+        }
+        with mock.patch.object(authority, "PUBLICATION_ENABLED", True), \
+             mock.patch.object(authority, "NODE", "publisher"), \
+             mock.patch.object(authority, "PUBLISHER_NODE", "publisher"), \
+             mock.patch.object(authority, "PUBLICATION_ADAPTERS", adapters), \
+             mock.patch.object(authority, "kubernetes_get") as get:
+            authority.publish_default_area()
+        get.assert_not_called()
+
+    def test_publication_adapters_reject_shared_objects(self):
+        adapters = {
+            name: {
+                "provider": name,
+                "refs": {"app": {"namespace": "dns", "name": "shared"}},
+            }
+            for name in ("alidns", "dnspod")
+        }
+        with mock.patch.object(authority, "PUBLICATION_ADAPTERS", adapters):
+            with self.assertRaisesRegex(RuntimeError, "is shared by adapters"):
+                authority.validate_publication_adapters()
+
     def test_custom_api_group_is_used_for_status(self):
         authority.CANDIDATES[:] = [{
             "id": "edge-a", "region": "test", "area": "test", "ip": "192.0.2.10",

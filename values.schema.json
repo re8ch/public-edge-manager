@@ -46,6 +46,31 @@
       "properties": {
         "enabled": { "type": "boolean" },
         "publisherNode": { "type": "string" },
+        "adapters": {
+          "type": "object",
+          "additionalProperties": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["provider", "refs"],
+            "properties": {
+              "enabled": { "type": "boolean" },
+              "provider": { "type": "string", "minLength": 1 },
+              "refs": {
+                "type": "object",
+                "minProperties": 1,
+                "additionalProperties": {
+                  "type": "object",
+                  "additionalProperties": false,
+                  "required": ["namespace", "name"],
+                  "properties": {
+                    "namespace": { "type": "string", "minLength": 1 },
+                    "name": { "type": "string", "minLength": 1 }
+                  }
+                }
+              }
+            }
+          }
+        },
         "refs": { "type": "object" }
       }
     },
@@ -87,13 +112,18 @@
           "publication": {
             "properties": {
               "publisherNode": { "minLength": 1 },
-              "refs": { "minProperties": 1 }
+              "refs": { "type": "object" },
+              "adapters": { "type": "object" }
             }
           },
           "rbac": {
             "properties": { "mutateIngresses": { "const": true } }
           }
-        }
+        },
+        "anyOf": [
+          { "properties": { "publication": { "properties": { "adapters": { "minProperties": 1 } } } } },
+          { "properties": { "publication": { "properties": { "refs": { "minProperties": 1 } } } } }
+        ]
       }
     }
   ]
