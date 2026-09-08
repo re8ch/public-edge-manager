@@ -21,6 +21,47 @@ entries:
         - name: support
           url: https://github.com/re8ch/public-edge-manager/issues
     apiVersion: v2
+    appVersion: 0.4.5
+    created: "2026-09-08T09:20:09.177330946Z"
+    description: Region- and capacity-aware PublicEdge health authority for Kubernetes.
+    digest: 4ade91700e139aae552d699db3e725c6896f1b43175336f2c2fe3ea38dcbbce5
+    home: https://github.com/re8ch/public-edge-manager
+    keywords:
+    - public-edge
+    - dns
+    - external-dns
+    - gateway-api
+    - cilium
+    - geo-routing
+    maintainers:
+    - name: RE8CH Platform
+    name: public-edge-manager
+    sources:
+    - https://github.com/re8ch/public-edge-manager
+    type: application
+    urls:
+    - https://github.com/re8ch/public-edge-manager/releases/download/v0.4.5/public-edge-manager-0.4.5.tgz
+    version: 0.4.5
+  - annotations:
+      artifacthub.io/category: networking
+      artifacthub.io/changes: |
+        - kind: changed
+          description: Publish the release to the existing GitHub Pages Helm repository registered by Artifact Hub.
+        - kind: fixed
+          description: Advance the existing Artifact Hub package instead of publishing metadata only to a separate OCI repository URL.
+      artifacthub.io/images: |
+        - name: public-edge-manager
+          image: ghcr.io/re8ch/public-edge-manager:0.4.4
+          platforms:
+            - linux/amd64
+            - linux/arm64
+      artifacthub.io/license: Apache-2.0
+      artifacthub.io/links: |
+        - name: source
+          url: https://github.com/re8ch/public-edge-manager
+        - name: support
+          url: https://github.com/re8ch/public-edge-manager/issues
+    apiVersion: v2
     appVersion: 0.4.4
     created: "2026-09-08T08:56:02.063019044Z"
     description: Region- and capacity-aware PublicEdge health authority for Kubernetes.
@@ -68,4 +109,4 @@ entries:
     urls:
     - https://re8ch.github.io/public-edge-manager/public-edge-manager-0.2.0.tgz
     version: 0.2.0
-generated: "2026-09-08T08:56:02.062200245Z"
+generated: "2026-09-08T09:20:09.176469708Z"
