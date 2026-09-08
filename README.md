@@ -45,7 +45,7 @@ fabricEvidence:
 ```
 
 `Shadow` reads and reports evidence without changing eligibility or ranking and
-is the recommended first production rollout. `Optional` preserves probe-only
+is suitable for an initial observation window. `Optional` preserves probe-only
 operation when the provider API or matching
 node assessment is absent. When a matching assessment exists, it must be fresh,
 carry `EvidenceReady=True`, and use an allowed state. `Required` additionally
@@ -57,6 +57,12 @@ fact used by Advanced Fabric rankings: absent, deleting, and non-`Ready=True`
 Nodes are excluded. `Required` fails closed if either Nodes or assessments
 cannot be read, preventing a fresh historical NPA from keeping a NotReady edge
 eligible.
+
+Production validation of the `Required` contract confirmed that a candidate
+becomes eligible only after the producer advances a fresh assessment to
+`Partial` or `Ready`; an `Unknown` candidate stays isolated even when its Node
+is Ready. Assessment timestamps and `validUntil` must continue advancing across
+producer sampling cycles.
 
 Candidates match assessments through `PublicEdge.spec.nodeName` and
 `NetworkPathAssessment.spec.subjectRef` with kind `Node`. Assessment scope must
@@ -72,7 +78,7 @@ all documentation addresses and names, then install the OCI chart:
 ```sh
 helm install public-edge-manager \
   oci://ghcr.io/re8ch/charts/public-edge-manager \
-  --version 0.4.2 \
+  --version 0.4.3 \
   --namespace public-edge-system --create-namespace \
   --values values-production.yaml
 ```
