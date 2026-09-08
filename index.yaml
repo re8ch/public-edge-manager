@@ -4,6 +4,47 @@ entries:
   - annotations:
       artifacthub.io/category: networking
       artifacthub.io/changes: |
+        - kind: fixed
+          description: Bound concurrent endpoint sampling so probe load cannot starve health and discovery requests.
+        - kind: added
+          description: Expose probe.maxWorkers for installations with different service counts and CPU budgets.
+      artifacthub.io/images: |
+        - name: public-edge-manager
+          image: ghcr.io/re8ch/public-edge-manager:0.4.6
+          platforms:
+            - linux/amd64
+            - linux/arm64
+      artifacthub.io/license: Apache-2.0
+      artifacthub.io/links: |
+        - name: source
+          url: https://github.com/re8ch/public-edge-manager
+        - name: support
+          url: https://github.com/re8ch/public-edge-manager/issues
+    apiVersion: v2
+    appVersion: 0.4.6
+    created: "2026-09-08T09:23:33.055190201Z"
+    description: Region- and capacity-aware PublicEdge health authority for Kubernetes.
+    digest: a97c31a390673162e95b8a157615a7eec18cc43297ec43117ac637289dfafc12
+    home: https://github.com/re8ch/public-edge-manager
+    keywords:
+    - public-edge
+    - dns
+    - external-dns
+    - gateway-api
+    - cilium
+    - geo-routing
+    maintainers:
+    - name: RE8CH Platform
+    name: public-edge-manager
+    sources:
+    - https://github.com/re8ch/public-edge-manager
+    type: application
+    urls:
+    - https://github.com/re8ch/public-edge-manager/releases/download/v0.4.6/public-edge-manager-0.4.6.tgz
+    version: 0.4.6
+  - annotations:
+      artifacthub.io/category: networking
+      artifacthub.io/changes: |
         - kind: changed
           description: Publish the release to the existing GitHub Pages Helm repository registered by Artifact Hub.
         - kind: fixed
@@ -109,4 +150,4 @@ entries:
     urls:
     - https://re8ch.github.io/public-edge-manager/public-edge-manager-0.2.0.tgz
     version: 0.2.0
-generated: "2026-09-08T09:20:09.176469708Z"
+generated: "2026-09-08T09:23:33.054324904Z"
