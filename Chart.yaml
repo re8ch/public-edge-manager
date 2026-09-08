@@ -2,8 +2,8 @@ apiVersion: v2
 name: public-edge-manager
 description: Region- and capacity-aware PublicEdge health authority for Kubernetes.
 type: application
-version: 0.4.3
-appVersion: "0.4.3"
+version: 0.4.4
+appVersion: "0.4.4"
 keywords: [public-edge, dns, external-dns, gateway-api, cilium, geo-routing]
 maintainers:
   - name: RE8CH Platform
@@ -13,12 +13,10 @@ annotations:
   artifacthub.io/license: Apache-2.0
   artifacthub.io/category: networking
   artifacthub.io/changes: |
-    - kind: added
-      description: Publish OCI repository ownership metadata for reliable Artifact Hub indexing and publisher verification.
     - kind: changed
-      description: Document the production-validated Required NPA and Kubernetes Node readiness decision contract.
+      description: Publish the release to the existing GitHub Pages Helm repository registered by Artifact Hub.
     - kind: fixed
-      description: Prevent Artifact Hub metadata from existing only in the source repository without an OCI artifacthub.io tag.
+      description: Advance the existing Artifact Hub package instead of publishing metadata only to a separate OCI repository URL.
   artifacthub.io/links: |
     - name: source
       url: https://github.com/re8ch/public-edge-manager
@@ -26,7 +24,7 @@ annotations:
       url: https://github.com/re8ch/public-edge-manager/issues
   artifacthub.io/images: |
     - name: public-edge-manager
-      image: ghcr.io/re8ch/public-edge-manager:0.4.3
+      image: ghcr.io/re8ch/public-edge-manager:0.4.4
       platforms:
         - linux/amd64
         - linux/arm64

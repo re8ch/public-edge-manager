@@ -69,3 +69,23 @@ jobs:
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: gh release create "${GITHUB_REF_NAME}" dist/* --verify-tag --generate-notes
+      - name: Build Artifact Hub Helm repository index
+        run: |
+          mkdir -p pages
+          if curl --fail --silent --show-error --location \
+            "https://${GITHUB_REPOSITORY_OWNER}.github.io/public-edge-manager/index.yaml" \
+            --output pages/index.yaml; then
+            helm repo index dist \
+              --url "https://github.com/${GITHUB_REPOSITORY}/releases/download/${GITHUB_REF_NAME}" \
+              --merge pages/index.yaml
+          else
+            helm repo index dist \
+              --url "https://github.com/${GITHUB_REPOSITORY}/releases/download/${GITHUB_REF_NAME}"
+          fi
+          cp dist/index.yaml artifacthub-repo.yml pages/
+      - name: Publish Artifact Hub Helm repository
+        uses: peaceiris/actions-gh-pages@84c30a85c19949d7eee79c4ff27748b70285e453 # v4.1.0
+        with:
+          github_token: ${{ secrets.GITHUB_TOKEN }}
+          publish_dir: ./pages
+          keep_files: true
