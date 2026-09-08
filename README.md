@@ -43,7 +43,9 @@ fabricEvidence:
   rankingWeights: {optimality: 100, stability: 100, independence: 50}
 ```
 
-`Optional` preserves probe-only operation when the provider API or matching
+`Shadow` reads and reports evidence without changing eligibility or ranking and
+is the recommended first production rollout. `Optional` preserves probe-only
+operation when the provider API or matching
 node assessment is absent. When a matching assessment exists, it must be fresh,
 carry `EvidenceReady=True`, and use an allowed state. `Required` additionally
 fails closed when the API or assessment is absent. `Disabled` neither reads the

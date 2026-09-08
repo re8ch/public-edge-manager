@@ -211,7 +211,7 @@ def fabric_evidence(candidate, now=None):
         available = FABRIC_API_AVAILABLE
         item = FABRIC_ASSESSMENTS.get(candidate.get("nodeName", ""))
     if not item:
-        eligible = FABRIC_EVIDENCE_MODE == "Optional"
+        eligible = FABRIC_EVIDENCE_MODE in ("Shadow", "Optional")
         reason = "AssessmentNotFound" if available else "ProviderUnavailable"
         return {"eligible": eligible, "mode": FABRIC_EVIDENCE_MODE,
                 "state": "Unavailable", "reason": reason, "score": 0}
@@ -223,7 +223,7 @@ def fabric_evidence(candidate, now=None):
                       if value.get("type") == "EvidenceReady"), {})
     reason = condition.get("reason", state)
     fresh = valid_until is not None and current <= valid_until
-    eligible = fresh and state in FABRIC_EVIDENCE_ALLOWED_STATES and condition.get("status") == "True"
+    evidence_eligible = fresh and state in FABRIC_EVIDENCE_ALLOWED_STATES and condition.get("status") == "True"
     dimensions = status.get("dimensions", {})
     confidence = status.get("confidence", {})
     score = 0
@@ -235,14 +235,15 @@ def fabric_evidence(candidate, now=None):
     if not fresh:
         reason = "EvidenceExpired" if valid_until is not None else "ValidityMissing"
     return {
-        "eligible": eligible,
+        "eligible": True if FABRIC_EVIDENCE_MODE == "Shadow" else evidence_eligible,
+        "wouldReject": not evidence_eligible,
         "mode": FABRIC_EVIDENCE_MODE,
         "assessment": item.get("metadata", {}).get("name", ""),
         "state": state,
         "reason": reason,
         "observedAt": status.get("observedAt", ""),
         "validUntil": status.get("validUntil", ""),
-        "score": score if eligible else 0,
+        "score": score if evidence_eligible and FABRIC_EVIDENCE_MODE != "Shadow" else 0,
     }
 
 

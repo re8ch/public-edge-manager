@@ -1,6 +1,6 @@
 image:
   repository: ghcr.io/re8ch/public-edge-manager
-  tag: "0.4.0"
+  tag: "0.4.1"
   digest: ""
   pullPolicy: IfNotPresent
 
@@ -54,7 +54,7 @@ candidateSelection:
 # Optional, provider-neutral network evidence. PublicEdge discovers the CRD by
 # API group/resource and never configures the producing fabric implementation.
 fabricEvidence:
-  mode: Disabled # Disabled | Optional | Required
+  mode: Disabled # Disabled | Shadow | Optional | Required
   apiGroup: networking.re8ch.com
   apiVersion: v1alpha1
   resource: networkpathassessments
