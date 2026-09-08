@@ -78,7 +78,7 @@ all documentation addresses and names, then install the OCI chart:
 ```sh
 helm install public-edge-manager \
   oci://ghcr.io/re8ch/charts/public-edge-manager \
-  --version 0.4.5 \
+  --version 0.4.6 \
   --namespace public-edge-system --create-namespace \
   --values values-production.yaml
 ```
