@@ -38,6 +38,7 @@
         "connectTimeoutSeconds": { "type": "number", "exclusiveMinimum": 0 },
         "responseTimeoutSeconds": { "type": "number", "exclusiveMinimum": 0 },
         "intervalSeconds": { "type": "integer", "minimum": 1 },
+        "maxWorkers": { "type": "integer", "minimum": 1, "maximum": 128 },
         "userAgent": { "type": "string", "minLength": 1 }
       }
     },
