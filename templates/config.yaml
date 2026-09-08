@@ -19,6 +19,13 @@ data:
   CANDIDATE_LATENCY_DIVISOR_MS: {{ .Values.candidateSelection.latencyDivisorMs | quote }}
   CANDIDATE_LATENCY_PENALTY_CAP: {{ .Values.candidateSelection.latencyPenaltyCap | quote }}
   CANDIDATE_LOCAL_NODE_BONUS: {{ .Values.candidateSelection.localNodeBonus | quote }}
+  FABRIC_EVIDENCE_MODE: {{ .Values.fabricEvidence.mode | quote }}
+  FABRIC_EVIDENCE_API_GROUP: {{ .Values.fabricEvidence.apiGroup | quote }}
+  FABRIC_EVIDENCE_API_VERSION: {{ .Values.fabricEvidence.apiVersion | quote }}
+  FABRIC_EVIDENCE_RESOURCE: {{ .Values.fabricEvidence.resource | quote }}
+  FABRIC_EVIDENCE_ALLOWED_STATES_JSON: {{ .Values.fabricEvidence.allowedStates | toJson | quote }}
+  FABRIC_EVIDENCE_MIN_CONFIDENCE: {{ .Values.fabricEvidence.minConfidence | quote }}
+  FABRIC_EVIDENCE_WEIGHTS_JSON: {{ .Values.fabricEvidence.rankingWeights | toJson | quote }}
 {{- $bind := dict -}}{{- $regions := dict -}}{{- $areas := dict -}}
 {{- range $node, $v := .Values.authorityNodes -}}
 {{- $_ := set $bind $node $v.bindAddress -}}{{- $_ := set $regions $node $v.region -}}{{- $_ := set $areas $node $v.area -}}

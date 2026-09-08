@@ -18,6 +18,76 @@ class AuthorityTests(unittest.TestCase):
         authority.SERVICES = {"app.example.com.": "app"}
         authority.HEALTH = {"app": {}}
         authority.CANDIDATES[:] = []
+        authority.FABRIC_ASSESSMENTS.clear()
+        authority.FABRIC_API_AVAILABLE = False
+        authority.FABRIC_EVIDENCE_MODE = "Disabled"
+        authority.FABRIC_EVIDENCE_ALLOWED_STATES = {"Ready", "Partial"}
+        authority.FABRIC_EVIDENCE_MIN_CONFIDENCE = 0
+        authority.FABRIC_EVIDENCE_WEIGHTS = {}
+
+    @staticmethod
+    def assessment(node="edge-node", state="Ready", valid_until="2099-01-01T00:00:00Z",
+                   condition_status="True"):
+        return {
+            "metadata": {"name": f"node-{node}"},
+            "spec": {
+                "subjectRef": {"apiVersion": "v1", "kind": "Node", "name": node},
+                "scope": {"plane": "host-and-pod", "direction": "bidirectional", "protocol": "mixed"},
+            },
+            "status": {
+                "state": state,
+                "observedAt": "2026-09-08T00:00:00Z",
+                "validUntil": valid_until,
+                "dimensions": {"optimality": .8, "stability": .7, "independence": None},
+                "confidence": {"optimality": .9, "stability": .8, "independence": 0},
+                "conditions": [{"type": "EvidenceReady", "status": condition_status,
+                                "reason": "AllDimensionsAvailable"}],
+            },
+        }
+
+    def test_refresh_fabric_assessments_indexes_node_subjects(self):
+        payload = {"items": [self.assessment(), {
+            "metadata": {"name": "unsupported"},
+            "spec": {"subjectRef": {"kind": "Service", "name": "app"},
+                     "scope": {"plane": "pod"}},
+        }]}
+        with mock.patch.object(authority, "FABRIC_EVIDENCE_MODE", "Optional"), \
+             mock.patch.object(authority, "kubernetes_get", return_value=payload):
+            authority.refresh_fabric_assessments()
+        self.assertTrue(authority.FABRIC_API_AVAILABLE)
+        self.assertEqual(set(authority.FABRIC_ASSESSMENTS), {"edge-node"})
+
+    def test_optional_fabric_evidence_allows_absent_provider(self):
+        with mock.patch.object(authority, "FABRIC_EVIDENCE_MODE", "Optional"):
+            result = authority.fabric_evidence({"nodeName": "edge-node"})
+        self.assertTrue(result["eligible"])
+        self.assertEqual(result["reason"], "ProviderUnavailable")
+
+    def test_required_fabric_evidence_rejects_absent_assessment(self):
+        with mock.patch.object(authority, "FABRIC_EVIDENCE_MODE", "Required"), \
+             mock.patch.object(authority, "FABRIC_API_AVAILABLE", True):
+            result = authority.fabric_evidence({"nodeName": "edge-node"})
+        self.assertFalse(result["eligible"])
+        self.assertEqual(result["reason"], "AssessmentNotFound")
+
+    def test_matching_stale_assessment_fails_closed(self):
+        authority.FABRIC_ASSESSMENTS["edge-node"] = self.assessment(
+            valid_until="2026-09-08T00:00:30Z"
+        )
+        with mock.patch.object(authority, "FABRIC_EVIDENCE_MODE", "Optional"):
+            result = authority.fabric_evidence({"nodeName": "edge-node"}, now=1788825700)
+        self.assertFalse(result["eligible"])
+        self.assertEqual(result["reason"], "EvidenceExpired")
+
+    def test_fresh_assessment_contributes_only_confident_dimensions(self):
+        authority.FABRIC_ASSESSMENTS["edge-node"] = self.assessment()
+        with mock.patch.object(authority, "FABRIC_EVIDENCE_MODE", "Required"), \
+             mock.patch.object(authority, "FABRIC_EVIDENCE_MIN_CONFIDENCE", .85), \
+             mock.patch.object(authority, "FABRIC_EVIDENCE_WEIGHTS",
+                               {"optimality": 100, "stability": 100, "independence": 100}):
+            result = authority.fabric_evidence({"nodeName": "edge-node"}, now=1788825600)
+        self.assertTrue(result["eligible"])
+        self.assertEqual(result["score"], 80)
 
     def test_disabled_and_draining_edges_are_not_candidates(self):
         payload = {"items": [

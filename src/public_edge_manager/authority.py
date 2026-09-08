@@ -46,6 +46,15 @@ CANDIDATE_PRIORITY_WEIGHT = max(0, int(os.getenv("CANDIDATE_PRIORITY_WEIGHT", "1
 CANDIDATE_LATENCY_DIVISOR_MS = max(1, int(os.getenv("CANDIDATE_LATENCY_DIVISOR_MS", "20")))
 CANDIDATE_LATENCY_PENALTY_CAP = max(0, int(os.getenv("CANDIDATE_LATENCY_PENALTY_CAP", "50")))
 CANDIDATE_LOCAL_NODE_BONUS = max(0, int(os.getenv("CANDIDATE_LOCAL_NODE_BONUS", "5")))
+FABRIC_EVIDENCE_MODE = os.getenv("FABRIC_EVIDENCE_MODE", "Disabled")
+FABRIC_EVIDENCE_API_GROUP = os.getenv("FABRIC_EVIDENCE_API_GROUP", "networking.re8ch.com")
+FABRIC_EVIDENCE_API_VERSION = os.getenv("FABRIC_EVIDENCE_API_VERSION", "v1alpha1")
+FABRIC_EVIDENCE_RESOURCE = os.getenv("FABRIC_EVIDENCE_RESOURCE", "networkpathassessments")
+FABRIC_EVIDENCE_ALLOWED_STATES = set(json.loads(os.getenv("FABRIC_EVIDENCE_ALLOWED_STATES_JSON", '["Ready","Partial"]')))
+FABRIC_EVIDENCE_MIN_CONFIDENCE = max(0.0, min(1.0, float(os.getenv("FABRIC_EVIDENCE_MIN_CONFIDENCE", "0"))))
+FABRIC_EVIDENCE_WEIGHTS = json.loads(os.getenv("FABRIC_EVIDENCE_WEIGHTS_JSON", "{}"))
+FABRIC_ASSESSMENTS = {}
+FABRIC_API_AVAILABLE = False
 
 
 def kubernetes_get(path):
@@ -158,6 +167,85 @@ def refresh_candidates():
                 HEALTH.setdefault(service, {})
 
 
+def refresh_fabric_assessments():
+    """Cache provider-neutral network evidence once per probe cycle."""
+    global FABRIC_API_AVAILABLE
+    if FABRIC_EVIDENCE_MODE == "Disabled":
+        with LOCK:
+            FABRIC_ASSESSMENTS.clear()
+            FABRIC_API_AVAILABLE = False
+        return
+    payload = kubernetes_get(
+        f"/apis/{FABRIC_EVIDENCE_API_GROUP}/{FABRIC_EVIDENCE_API_VERSION}/{FABRIC_EVIDENCE_RESOURCE}"
+    )
+    available = payload is not None
+    assessments = {}
+    for item in (payload or {}).get("items", []):
+        subject = item.get("spec", {}).get("subjectRef", {})
+        scope = item.get("spec", {}).get("scope", {})
+        if subject.get("kind") != "Node" or not subject.get("name"):
+            continue
+        if scope.get("plane") not in ("host-and-pod", "pod"):
+            continue
+        assessments[subject["name"]] = item
+    with LOCK:
+        FABRIC_ASSESSMENTS.clear()
+        FABRIC_ASSESSMENTS.update(assessments)
+        FABRIC_API_AVAILABLE = available
+
+
+def parse_timestamp(value):
+    if not value:
+        return None
+    try:
+        return datetime.fromisoformat(value.replace("Z", "+00:00")).timestamp()
+    except (TypeError, ValueError):
+        return None
+
+
+def fabric_evidence(candidate, now=None):
+    """Evaluate cached evidence without assuming an Advanced Fabric release."""
+    if FABRIC_EVIDENCE_MODE == "Disabled":
+        return {"eligible": True, "mode": "Disabled", "state": "Disabled", "score": 0}
+    with LOCK:
+        available = FABRIC_API_AVAILABLE
+        item = FABRIC_ASSESSMENTS.get(candidate.get("nodeName", ""))
+    if not item:
+        eligible = FABRIC_EVIDENCE_MODE == "Optional"
+        reason = "AssessmentNotFound" if available else "ProviderUnavailable"
+        return {"eligible": eligible, "mode": FABRIC_EVIDENCE_MODE,
+                "state": "Unavailable", "reason": reason, "score": 0}
+    status = item.get("status", {})
+    state = status.get("state", "Unknown")
+    valid_until = parse_timestamp(status.get("validUntil"))
+    current = time.time() if now is None else now
+    condition = next((value for value in status.get("conditions", [])
+                      if value.get("type") == "EvidenceReady"), {})
+    reason = condition.get("reason", state)
+    fresh = valid_until is not None and current <= valid_until
+    eligible = fresh and state in FABRIC_EVIDENCE_ALLOWED_STATES and condition.get("status") == "True"
+    dimensions = status.get("dimensions", {})
+    confidence = status.get("confidence", {})
+    score = 0
+    for dimension, weight in FABRIC_EVIDENCE_WEIGHTS.items():
+        value = dimensions.get(dimension)
+        if value is None or float(confidence.get(dimension, 0)) < FABRIC_EVIDENCE_MIN_CONFIDENCE:
+            continue
+        score += int(float(value) * int(weight))
+    if not fresh:
+        reason = "EvidenceExpired" if valid_until is not None else "ValidityMissing"
+    return {
+        "eligible": eligible,
+        "mode": FABRIC_EVIDENCE_MODE,
+        "assessment": item.get("metadata", {}).get("name", ""),
+        "state": state,
+        "reason": reason,
+        "observedAt": status.get("observedAt", ""),
+        "validUntil": status.get("validUntil", ""),
+        "score": score if eligible else 0,
+    }
+
+
 def bind_address():
     per_node = json.loads(os.getenv("BIND_ADDRESSES_JSON", "{}"))
     if NODE in per_node:
@@ -230,6 +318,7 @@ def probe(candidate, service, url):
 
 def probe_all():
     refresh_candidates()
+    refresh_fabric_assessments()
     threads = []
     for candidate in CANDIDATES:
         for service, url in candidate.get("probes", {}).items():
@@ -270,18 +359,24 @@ def publish_edge_statuses():
             if service in candidate.get("probes", {})
         }
         ready_services = sorted(name for name, result in service_health.items() if result["ready"])
-        ready = bool(ready_services)
+        network_evidence = fabric_evidence(candidate)
+        ready = bool(ready_services) and network_evidence["eligible"]
         condition = {
             "type": "Ready",
             "status": "True" if ready else "False",
-            "reason": "ServiceProbeSucceeded" if ready else "NoServiceProbeSucceeded",
-            "message": "ready services: " + ", ".join(ready_services) if ready else "no configured service probe is ready",
+            "reason": ("ServiceAndNetworkEvidenceReady" if ready else
+                       network_evidence.get("reason", "NetworkEvidenceRejected")
+                       if ready_services else "NoServiceProbeSucceeded"),
+            "message": ("ready services: " + ", ".join(ready_services) if ready else
+                        "network evidence rejected candidate" if ready_services else
+                        "no configured service probe is ready"),
             "lastTransitionTime": observed_at,
         }
         try:
             kubernetes_patch(
                 f"/apis/{API_GROUP}/v1alpha1/publicedges/{edge_id}/status",
-                {"status": {"observedAt": observed_at, "services": service_health, "conditions": [condition]}},
+                {"status": {"observedAt": observed_at, "services": service_health,
+                            "networkEvidence": network_evidence, "conditions": [condition]}},
             )
         except Exception as exc:
             print(f"publicedge_status edge={edge_id} error={exc}", flush=True)
@@ -362,7 +457,8 @@ def ranked(service):
         if service not in candidate.get("probes", {}):
             continue
         observed = snapshot.get(candidate["id"], {})
-        ready = bool(observed.get("ready")) and gate_ready
+        network_evidence = fabric_evidence(candidate)
+        ready = bool(observed.get("ready")) and gate_ready and network_evidence["eligible"]
         score = 0
         if ready:
             regional_priority = candidate.get("priorityByRegion", {}).get(REGION, candidate.get("priority", 0))
@@ -377,6 +473,7 @@ def ranked(service):
             score -= min(int(observed.get("latencyMs", 0)) // CANDIDATE_LATENCY_DIVISOR_MS, CANDIDATE_LATENCY_PENALTY_CAP)
             if candidate["id"] == NODE:
                 score += CANDIDATE_LOCAL_NODE_BONUS
+            score += network_evidence["score"]
         result.append({
             "id": candidate["id"], "region": candidate["region"],
             "area": candidate.get("area", candidate["region"]), "ip": candidate["ip"],
@@ -388,7 +485,11 @@ def ranked(service):
             "score": score, "state": "ready" if ready else "unavailable",
             "statusCode": observed.get("statusCode", 0), "latencyMs": observed.get("latencyMs", 0),
             "observedAt": observed.get("observedAt", 0),
-            "reason": observed.get("failure", "") if gate_ready else "configured readiness gate is not satisfied",
+            "networkEvidence": network_evidence,
+            "reason": (network_evidence.get("reason", "network evidence rejected candidate")
+                       if not network_evidence["eligible"] else
+                       observed.get("failure", "") if gate_ready else
+                       "configured readiness gate is not satisfied"),
         })
     return sorted(result, key=lambda item: (-item["score"], item["id"]))
 
