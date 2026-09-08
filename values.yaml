@@ -1,6 +1,6 @@
 image:
   repository: ghcr.io/re8ch/public-edge-manager
-  tag: "0.3.2"
+  tag: "0.4.0"
   digest: ""
   pullPolicy: IfNotPresent
 
@@ -38,7 +38,7 @@ probe:
   connectTimeoutSeconds: 5
   responseTimeoutSeconds: 12
   intervalSeconds: 3
-  userAgent: public-edge-manager/0.3
+  userAgent: public-edge-manager/0.4
 
 dns:
   soaRname: hostmaster.invalid.
@@ -51,9 +51,25 @@ candidateSelection:
   latencyPenaltyCap: 50
   localNodeBonus: 5
 
+# Optional, provider-neutral network evidence. PublicEdge discovers the CRD by
+# API group/resource and never configures the producing fabric implementation.
+fabricEvidence:
+  mode: Disabled # Disabled | Optional | Required
+  apiGroup: networking.re8ch.com
+  apiVersion: v1alpha1
+  resource: networkpathassessments
+  allowedStates: [Ready, Partial]
+  minConfidence: 0
+  rankingWeights: {optimality: 0, stability: 0, independence: 0}
+
 publication:
   enabled: false
   publisherNode: ""
+  # Named provider adapters may publish the same selected edge through
+  # independent ExternalDNS-only Ingress objects. Credentials and provider
+  # reconciliation remain isolated in their ExternalDNS releases.
+  adapters: {}
+  # Deprecated singleton retained for backwards compatibility.
   refs: {}
 
 rbac:

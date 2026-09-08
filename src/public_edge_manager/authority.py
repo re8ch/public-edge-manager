@@ -35,6 +35,7 @@ API_GROUP = os.getenv("API_GROUP", "networking.re8ch.com")
 SERVICE_ACCOUNT = "/var/run/secrets/kubernetes.io/serviceaccount"
 PUBLISHER_NODE = os.getenv("PUBLISHER_NODE", "")
 PUBLICATION_REFS = json.loads(os.getenv("PUBLICATION_REFS_JSON", "{}"))
+PUBLICATION_ADAPTERS = json.loads(os.getenv("PUBLICATION_ADAPTERS_JSON", "{}"))
 PUBLICATION_ENABLED = os.getenv("PUBLICATION_ENABLED", "false").lower() == "true"
 READINESS_GATES = json.loads(os.getenv("READINESS_GATES_JSON", "{}"))
 SOA_RNAME = os.getenv("SOA_RNAME", "hostmaster.invalid.")
@@ -45,6 +46,15 @@ CANDIDATE_PRIORITY_WEIGHT = max(0, int(os.getenv("CANDIDATE_PRIORITY_WEIGHT", "1
 CANDIDATE_LATENCY_DIVISOR_MS = max(1, int(os.getenv("CANDIDATE_LATENCY_DIVISOR_MS", "20")))
 CANDIDATE_LATENCY_PENALTY_CAP = max(0, int(os.getenv("CANDIDATE_LATENCY_PENALTY_CAP", "50")))
 CANDIDATE_LOCAL_NODE_BONUS = max(0, int(os.getenv("CANDIDATE_LOCAL_NODE_BONUS", "5")))
+FABRIC_EVIDENCE_MODE = os.getenv("FABRIC_EVIDENCE_MODE", "Disabled")
+FABRIC_EVIDENCE_API_GROUP = os.getenv("FABRIC_EVIDENCE_API_GROUP", "networking.re8ch.com")
+FABRIC_EVIDENCE_API_VERSION = os.getenv("FABRIC_EVIDENCE_API_VERSION", "v1alpha1")
+FABRIC_EVIDENCE_RESOURCE = os.getenv("FABRIC_EVIDENCE_RESOURCE", "networkpathassessments")
+FABRIC_EVIDENCE_ALLOWED_STATES = set(json.loads(os.getenv("FABRIC_EVIDENCE_ALLOWED_STATES_JSON", '["Ready","Partial"]')))
+FABRIC_EVIDENCE_MIN_CONFIDENCE = max(0.0, min(1.0, float(os.getenv("FABRIC_EVIDENCE_MIN_CONFIDENCE", "0"))))
+FABRIC_EVIDENCE_WEIGHTS = json.loads(os.getenv("FABRIC_EVIDENCE_WEIGHTS_JSON", "{}"))
+FABRIC_ASSESSMENTS = {}
+FABRIC_API_AVAILABLE = False
 
 
 def kubernetes_get(path):
@@ -157,6 +167,85 @@ def refresh_candidates():
                 HEALTH.setdefault(service, {})
 
 
+def refresh_fabric_assessments():
+    """Cache provider-neutral network evidence once per probe cycle."""
+    global FABRIC_API_AVAILABLE
+    if FABRIC_EVIDENCE_MODE == "Disabled":
+        with LOCK:
+            FABRIC_ASSESSMENTS.clear()
+            FABRIC_API_AVAILABLE = False
+        return
+    payload = kubernetes_get(
+        f"/apis/{FABRIC_EVIDENCE_API_GROUP}/{FABRIC_EVIDENCE_API_VERSION}/{FABRIC_EVIDENCE_RESOURCE}"
+    )
+    available = payload is not None
+    assessments = {}
+    for item in (payload or {}).get("items", []):
+        subject = item.get("spec", {}).get("subjectRef", {})
+        scope = item.get("spec", {}).get("scope", {})
+        if subject.get("kind") != "Node" or not subject.get("name"):
+            continue
+        if scope.get("plane") not in ("host-and-pod", "pod"):
+            continue
+        assessments[subject["name"]] = item
+    with LOCK:
+        FABRIC_ASSESSMENTS.clear()
+        FABRIC_ASSESSMENTS.update(assessments)
+        FABRIC_API_AVAILABLE = available
+
+
+def parse_timestamp(value):
+    if not value:
+        return None
+    try:
+        return datetime.fromisoformat(value.replace("Z", "+00:00")).timestamp()
+    except (TypeError, ValueError):
+        return None
+
+
+def fabric_evidence(candidate, now=None):
+    """Evaluate cached evidence without assuming an Advanced Fabric release."""
+    if FABRIC_EVIDENCE_MODE == "Disabled":
+        return {"eligible": True, "mode": "Disabled", "state": "Disabled", "score": 0}
+    with LOCK:
+        available = FABRIC_API_AVAILABLE
+        item = FABRIC_ASSESSMENTS.get(candidate.get("nodeName", ""))
+    if not item:
+        eligible = FABRIC_EVIDENCE_MODE == "Optional"
+        reason = "AssessmentNotFound" if available else "ProviderUnavailable"
+        return {"eligible": eligible, "mode": FABRIC_EVIDENCE_MODE,
+                "state": "Unavailable", "reason": reason, "score": 0}
+    status = item.get("status", {})
+    state = status.get("state", "Unknown")
+    valid_until = parse_timestamp(status.get("validUntil"))
+    current = time.time() if now is None else now
+    condition = next((value for value in status.get("conditions", [])
+                      if value.get("type") == "EvidenceReady"), {})
+    reason = condition.get("reason", state)
+    fresh = valid_until is not None and current <= valid_until
+    eligible = fresh and state in FABRIC_EVIDENCE_ALLOWED_STATES and condition.get("status") == "True"
+    dimensions = status.get("dimensions", {})
+    confidence = status.get("confidence", {})
+    score = 0
+    for dimension, weight in FABRIC_EVIDENCE_WEIGHTS.items():
+        value = dimensions.get(dimension)
+        if value is None or float(confidence.get(dimension, 0)) < FABRIC_EVIDENCE_MIN_CONFIDENCE:
+            continue
+        score += int(float(value) * int(weight))
+    if not fresh:
+        reason = "EvidenceExpired" if valid_until is not None else "ValidityMissing"
+    return {
+        "eligible": eligible,
+        "mode": FABRIC_EVIDENCE_MODE,
+        "assessment": item.get("metadata", {}).get("name", ""),
+        "state": state,
+        "reason": reason,
+        "observedAt": status.get("observedAt", ""),
+        "validUntil": status.get("validUntil", ""),
+        "score": score if eligible else 0,
+    }
+
+
 def bind_address():
     per_node = json.loads(os.getenv("BIND_ADDRESSES_JSON", "{}"))
     if NODE in per_node:
@@ -229,6 +318,7 @@ def probe(candidate, service, url):
 
 def probe_all():
     refresh_candidates()
+    refresh_fabric_assessments()
     threads = []
     for candidate in CANDIDATES:
         for service, url in candidate.get("probes", {}).items():
@@ -269,48 +359,91 @@ def publish_edge_statuses():
             if service in candidate.get("probes", {})
         }
         ready_services = sorted(name for name, result in service_health.items() if result["ready"])
-        ready = bool(ready_services)
+        network_evidence = fabric_evidence(candidate)
+        ready = bool(ready_services) and network_evidence["eligible"]
         condition = {
             "type": "Ready",
             "status": "True" if ready else "False",
-            "reason": "ServiceProbeSucceeded" if ready else "NoServiceProbeSucceeded",
-            "message": "ready services: " + ", ".join(ready_services) if ready else "no configured service probe is ready",
+            "reason": ("ServiceAndNetworkEvidenceReady" if ready else
+                       network_evidence.get("reason", "NetworkEvidenceRejected")
+                       if ready_services else "NoServiceProbeSucceeded"),
+            "message": ("ready services: " + ", ".join(ready_services) if ready else
+                        "network evidence rejected candidate" if ready_services else
+                        "no configured service probe is ready"),
             "lastTransitionTime": observed_at,
         }
         try:
             kubernetes_patch(
                 f"/apis/{API_GROUP}/v1alpha1/publicedges/{edge_id}/status",
-                {"status": {"observedAt": observed_at, "services": service_health, "conditions": [condition]}},
+                {"status": {"observedAt": observed_at, "services": service_health,
+                            "networkEvidence": network_evidence, "conditions": [condition]}},
             )
         except Exception as exc:
             print(f"publicedge_status edge={edge_id} error={exc}", flush=True)
 
 
 def publish_default_area():
-    """Update the one ExternalDNS authority object for non-delegated names.
+    """Update provider-scoped publication objects for non-delegated names.
 
     Regional NS answers stay request-area aware. A global DNS A record cannot,
-    so one elected authority publishes its configured area and removes DNS
-    ownership from application Routes.
+    so one elected authority publishes its configured area. Each adapter owns
+    a distinct set of ExternalDNS-only Ingress objects and provider credentials
+    remain outside Public Edge Manager.
     """
     if not PUBLICATION_ENABLED or NODE != PUBLISHER_NODE:
         return
-    for service, ref in PUBLICATION_REFS.items():
-        try:
-            selected = next((item for item in ranked(service) if item["state"] == "ready"), None)
-            if not selected:
-                continue
-            path = f"/apis/networking.k8s.io/v1/namespaces/{ref['namespace']}/ingresses/{ref['name']}"
-            current = kubernetes_get(path)
-            annotations = (current or {}).get("metadata", {}).get("annotations", {})
-            if annotations.get("external-dns.alpha.kubernetes.io/target") == selected["ip"]:
-                continue
-            kubernetes_patch(path, {"metadata": {"annotations": {
-                "external-dns.alpha.kubernetes.io/target": selected["ip"],
-                f"{API_GROUP}/selected-public-edge": selected["id"],
-            }}})
-        except Exception as exc:
-            print(f"publication service={service} error={exc}", flush=True)
+    adapters = PUBLICATION_ADAPTERS or {
+        "legacy": {"provider": "external-dns", "refs": PUBLICATION_REFS}
+    }
+    for adapter_name, adapter in adapters.items():
+        if not adapter.get("enabled", True):
+            continue
+        provider = adapter.get("provider", adapter_name)
+        for service, ref in adapter.get("refs", {}).items():
+            try:
+                selected = next((item for item in ranked(service) if item["state"] == "ready"), None)
+                if not selected:
+                    continue
+                path = f"/apis/networking.k8s.io/v1/namespaces/{ref['namespace']}/ingresses/{ref['name']}"
+                current = kubernetes_get(path)
+                annotations = (current or {}).get("metadata", {}).get("annotations", {})
+                desired = {
+                    "external-dns.alpha.kubernetes.io/target": selected["ip"],
+                    f"{API_GROUP}/selected-public-edge": selected["id"],
+                    f"{API_GROUP}/publication-adapter": adapter_name,
+                    f"{API_GROUP}/dns-provider": provider,
+                }
+                if all(annotations.get(key) == value for key, value in desired.items()):
+                    continue
+                kubernetes_patch(path, {"metadata": {"annotations": desired}})
+            except Exception as exc:
+                print(
+                    f"publication adapter={adapter_name} provider={provider} "
+                    f"service={service} error={exc}", flush=True,
+                )
+
+
+def validate_publication_adapters():
+    """Reject ambiguous sinks before any provider-owned object is mutated."""
+    if not PUBLICATION_ADAPTERS:
+        return
+    claimed = {}
+    known_services = set(SERVICES.values())
+    for adapter_name, adapter in PUBLICATION_ADAPTERS.items():
+        if not adapter.get("enabled", True):
+            continue
+        for service, ref in adapter.get("refs", {}).items():
+            if service not in known_services:
+                raise RuntimeError(
+                    f"publication adapter {adapter_name!r} references unknown service {service!r}"
+                )
+            identity = (ref["namespace"], ref["name"])
+            if identity in claimed:
+                raise RuntimeError(
+                    f"publication object {identity[0]}/{identity[1]} is shared by adapters "
+                    f"{claimed[identity]!r} and {adapter_name!r}"
+                )
+            claimed[identity] = adapter_name
 
 
 def ranked(service):
@@ -324,7 +457,8 @@ def ranked(service):
         if service not in candidate.get("probes", {}):
             continue
         observed = snapshot.get(candidate["id"], {})
-        ready = bool(observed.get("ready")) and gate_ready
+        network_evidence = fabric_evidence(candidate)
+        ready = bool(observed.get("ready")) and gate_ready and network_evidence["eligible"]
         score = 0
         if ready:
             regional_priority = candidate.get("priorityByRegion", {}).get(REGION, candidate.get("priority", 0))
@@ -339,6 +473,7 @@ def ranked(service):
             score -= min(int(observed.get("latencyMs", 0)) // CANDIDATE_LATENCY_DIVISOR_MS, CANDIDATE_LATENCY_PENALTY_CAP)
             if candidate["id"] == NODE:
                 score += CANDIDATE_LOCAL_NODE_BONUS
+            score += network_evidence["score"]
         result.append({
             "id": candidate["id"], "region": candidate["region"],
             "area": candidate.get("area", candidate["region"]), "ip": candidate["ip"],
@@ -350,7 +485,11 @@ def ranked(service):
             "score": score, "state": "ready" if ready else "unavailable",
             "statusCode": observed.get("statusCode", 0), "latencyMs": observed.get("latencyMs", 0),
             "observedAt": observed.get("observedAt", 0),
-            "reason": observed.get("failure", "") if gate_ready else "configured readiness gate is not satisfied",
+            "networkEvidence": network_evidence,
+            "reason": (network_evidence.get("reason", "network evidence rejected candidate")
+                       if not network_evidence["eligible"] else
+                       observed.get("failure", "") if gate_ready else
+                       "configured readiness gate is not satisfied"),
         })
     return sorted(result, key=lambda item: (-item["score"], item["id"]))
 
@@ -502,6 +641,7 @@ def main():
         raise RuntimeError("NAMESERVERS must configure at least one authoritative nameserver")
     if not CANDIDATES and not KUBERNETES_API:
         raise RuntimeError("no PublicEdge API or CANDIDATES_JSON configured")
+    validate_publication_adapters()
     http = ThreadingHTTPServer(("0.0.0.0", HTTP_PORT), HTTPHandler)
     threading.Thread(target=http.serve_forever, daemon=True).start()
     probe_all()

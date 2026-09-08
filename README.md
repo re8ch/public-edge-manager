@@ -16,11 +16,44 @@ does not require code or ConfigMaps from a separate private repository.
 2. A healthy edge in the authority replica's configured area beats a remote edge.
 3. Capacity, priority, application latency, and a small node-local preference
    provide deterministic ordering inside an area.
-4. DNS A or CNAME answers publish the best equally scored candidates.
-5. An optional legacy mode updates explicitly named ExternalDNS-only Ingresses.
+4. Optional provider-neutral `NetworkPathAssessment` evidence can exclude a
+   candidate whose evidence is stale or unusable and contribute
+   confidence-bounded O/S/I ranking signals.
+5. DNS A or CNAME answers publish the best equally scored candidates.
+6. Optional named publication adapters update provider-scoped ExternalDNS-only
+   Ingresses with the selected edge.
 
 Public Edge Manager does not configure routers, NAT, BGP, certificates, or
 application Gateways. Those remain explicit operator-owned infrastructure.
+
+### Optional network evidence
+
+PublicEdge can consume a provider-neutral, cluster-scoped assessment API without
+depending on an Advanced Fabric namespace, release name, ConfigMap or internal
+implementation. The built-in defaults keep this integration disabled:
+
+```yaml
+fabricEvidence:
+  mode: Optional
+  apiGroup: networking.re8ch.com
+  apiVersion: v1alpha1
+  resource: networkpathassessments
+  allowedStates: [Ready, Partial]
+  minConfidence: 0.6
+  rankingWeights: {optimality: 100, stability: 100, independence: 50}
+```
+
+`Optional` preserves probe-only operation when the provider API or matching
+node assessment is absent. When a matching assessment exists, it must be fresh,
+carry `EvidenceReady=True`, and use an allowed state. `Required` additionally
+fails closed when the API or assessment is absent. `Disabled` neither reads the
+API nor renders its RBAC permission.
+
+Candidates match assessments through `PublicEdge.spec.nodeName` and
+`NetworkPathAssessment.spec.subjectRef` with kind `Node`. Assessment scope must
+be `pod` or `host-and-pod`. The controller records the evidence disposition in
+its API and `PublicEdge` status but never configures the evidence producer or
+network dataplane.
 
 ## Install
 
@@ -30,7 +63,7 @@ all documentation addresses and names, then install the OCI chart:
 ```sh
 helm install public-edge-manager \
   oci://ghcr.io/re8ch/charts/public-edge-manager \
-  --version 0.3.1 \
+  --version 0.4.0 \
   --namespace public-edge-system --create-namespace \
   --values values-production.yaml
 ```
@@ -51,8 +84,45 @@ The chart creates two Services:
   HTTP API on port 8080.
 
 Ingress mutation is disabled by default. Enable `publication.enabled` and
-`rbac.mutateIngresses` together only for the legacy ExternalDNS publication
-mode. Normal delegated authoritative DNS requires read-only Ingress access.
+`rbac.mutateIngresses` together only for provider publication. Normal delegated
+authoritative DNS requires read-only Ingress access.
+
+### Multiple DNS publication adapters
+
+Public Edge Manager can fan one selected healthy edge out to multiple named,
+provider-scoped publication objects. Each adapter owns separate
+ExternalDNS-only Ingresses, so credentials, zone filters, ownership registries,
+write policies and failure domains remain isolated in the corresponding
+ExternalDNS release:
+
+```yaml
+publication:
+  enabled: true
+  publisherNode: edge-controller-1
+  adapters:
+    alidns:
+      provider: alibabacloud
+      refs:
+        app: {namespace: dns-publication, name: app-alidns}
+    dnspod:
+      provider: tencent-dnspod
+      refs:
+        app: {namespace: dns-publication, name: app-dnspod}
+    esa:
+      enabled: false
+      provider: alibaba-esa
+      refs:
+        app: {namespace: dns-publication, name: app-esa}
+rbac:
+  mutateIngresses: true
+```
+
+The chart deliberately does not mount cloud credentials or call provider APIs.
+Alibaba Cloud DNS uses ExternalDNS's `alibabacloud` provider, Tencent DNSPod
+uses an ExternalDNS webhook, and ESA requires an ESA-capable ExternalDNS webhook
+or controller. Keep an adapter disabled until its executor, credentials and
+ownership policy have been validated. The deprecated `publication.refs` map is
+still accepted as the single `legacy` adapter.
 
 `readinessGates` can fail a sensitive service closed unless JSON authority
 evidence in a ConfigMap agrees with the ready addresses of an EndpointSlice.

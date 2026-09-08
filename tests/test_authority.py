@@ -18,6 +18,76 @@ class AuthorityTests(unittest.TestCase):
         authority.SERVICES = {"app.example.com.": "app"}
         authority.HEALTH = {"app": {}}
         authority.CANDIDATES[:] = []
+        authority.FABRIC_ASSESSMENTS.clear()
+        authority.FABRIC_API_AVAILABLE = False
+        authority.FABRIC_EVIDENCE_MODE = "Disabled"
+        authority.FABRIC_EVIDENCE_ALLOWED_STATES = {"Ready", "Partial"}
+        authority.FABRIC_EVIDENCE_MIN_CONFIDENCE = 0
+        authority.FABRIC_EVIDENCE_WEIGHTS = {}
+
+    @staticmethod
+    def assessment(node="edge-node", state="Ready", valid_until="2099-01-01T00:00:00Z",
+                   condition_status="True"):
+        return {
+            "metadata": {"name": f"node-{node}"},
+            "spec": {
+                "subjectRef": {"apiVersion": "v1", "kind": "Node", "name": node},
+                "scope": {"plane": "host-and-pod", "direction": "bidirectional", "protocol": "mixed"},
+            },
+            "status": {
+                "state": state,
+                "observedAt": "2026-09-08T00:00:00Z",
+                "validUntil": valid_until,
+                "dimensions": {"optimality": .8, "stability": .7, "independence": None},
+                "confidence": {"optimality": .9, "stability": .8, "independence": 0},
+                "conditions": [{"type": "EvidenceReady", "status": condition_status,
+                                "reason": "AllDimensionsAvailable"}],
+            },
+        }
+
+    def test_refresh_fabric_assessments_indexes_node_subjects(self):
+        payload = {"items": [self.assessment(), {
+            "metadata": {"name": "unsupported"},
+            "spec": {"subjectRef": {"kind": "Service", "name": "app"},
+                     "scope": {"plane": "pod"}},
+        }]}
+        with mock.patch.object(authority, "FABRIC_EVIDENCE_MODE", "Optional"), \
+             mock.patch.object(authority, "kubernetes_get", return_value=payload):
+            authority.refresh_fabric_assessments()
+        self.assertTrue(authority.FABRIC_API_AVAILABLE)
+        self.assertEqual(set(authority.FABRIC_ASSESSMENTS), {"edge-node"})
+
+    def test_optional_fabric_evidence_allows_absent_provider(self):
+        with mock.patch.object(authority, "FABRIC_EVIDENCE_MODE", "Optional"):
+            result = authority.fabric_evidence({"nodeName": "edge-node"})
+        self.assertTrue(result["eligible"])
+        self.assertEqual(result["reason"], "ProviderUnavailable")
+
+    def test_required_fabric_evidence_rejects_absent_assessment(self):
+        with mock.patch.object(authority, "FABRIC_EVIDENCE_MODE", "Required"), \
+             mock.patch.object(authority, "FABRIC_API_AVAILABLE", True):
+            result = authority.fabric_evidence({"nodeName": "edge-node"})
+        self.assertFalse(result["eligible"])
+        self.assertEqual(result["reason"], "AssessmentNotFound")
+
+    def test_matching_stale_assessment_fails_closed(self):
+        authority.FABRIC_ASSESSMENTS["edge-node"] = self.assessment(
+            valid_until="2026-09-08T00:00:30Z"
+        )
+        with mock.patch.object(authority, "FABRIC_EVIDENCE_MODE", "Optional"):
+            result = authority.fabric_evidence({"nodeName": "edge-node"}, now=1788825700)
+        self.assertFalse(result["eligible"])
+        self.assertEqual(result["reason"], "EvidenceExpired")
+
+    def test_fresh_assessment_contributes_only_confident_dimensions(self):
+        authority.FABRIC_ASSESSMENTS["edge-node"] = self.assessment()
+        with mock.patch.object(authority, "FABRIC_EVIDENCE_MODE", "Required"), \
+             mock.patch.object(authority, "FABRIC_EVIDENCE_MIN_CONFIDENCE", .85), \
+             mock.patch.object(authority, "FABRIC_EVIDENCE_WEIGHTS",
+                               {"optimality": 100, "stability": 100, "independence": 100}):
+            result = authority.fabric_evidence({"nodeName": "edge-node"}, now=1788825600)
+        self.assertTrue(result["eligible"])
+        self.assertEqual(result["score"], 80)
 
     def test_disabled_and_draining_edges_are_not_candidates(self):
         payload = {"items": [
@@ -118,6 +188,65 @@ class AuthorityTests(unittest.TestCase):
              mock.patch.object(authority, "kubernetes_get") as get:
             authority.publish_default_area()
         get.assert_not_called()
+
+    def test_named_publication_adapters_patch_each_provider_object(self):
+        adapters = {
+            "alidns": {
+                "provider": "alibabacloud",
+                "refs": {"app": {"namespace": "dns", "name": "app-alidns"}},
+            },
+            "dnspod": {
+                "provider": "tencent-dnspod",
+                "refs": {"app": {"namespace": "dns", "name": "app-dnspod"}},
+            },
+        }
+        selected = {"id": "edge-a", "ip": "192.0.2.10", "state": "ready"}
+        with mock.patch.object(authority, "PUBLICATION_ENABLED", True), \
+             mock.patch.object(authority, "NODE", "publisher"), \
+             mock.patch.object(authority, "PUBLISHER_NODE", "publisher"), \
+             mock.patch.object(authority, "PUBLICATION_ADAPTERS", adapters), \
+             mock.patch.object(authority, "ranked", return_value=[selected]), \
+             mock.patch.object(authority, "kubernetes_get", return_value={"metadata": {"annotations": {}}}), \
+             mock.patch.object(authority, "kubernetes_patch") as patch:
+            authority.publish_default_area()
+        self.assertEqual(patch.call_count, 2)
+        paths = {call.args[0] for call in patch.call_args_list}
+        self.assertEqual(paths, {
+            "/apis/networking.k8s.io/v1/namespaces/dns/ingresses/app-alidns",
+            "/apis/networking.k8s.io/v1/namespaces/dns/ingresses/app-dnspod",
+        })
+        annotations = [call.args[1]["metadata"]["annotations"] for call in patch.call_args_list]
+        self.assertEqual({item[f"{authority.API_GROUP}/dns-provider"] for item in annotations}, {
+            "alibabacloud", "tencent-dnspod",
+        })
+
+    def test_disabled_publication_adapter_is_skipped(self):
+        adapters = {
+            "esa": {
+                "enabled": False,
+                "provider": "alibaba-esa",
+                "refs": {"app": {"namespace": "dns", "name": "app-esa"}},
+            }
+        }
+        with mock.patch.object(authority, "PUBLICATION_ENABLED", True), \
+             mock.patch.object(authority, "NODE", "publisher"), \
+             mock.patch.object(authority, "PUBLISHER_NODE", "publisher"), \
+             mock.patch.object(authority, "PUBLICATION_ADAPTERS", adapters), \
+             mock.patch.object(authority, "kubernetes_get") as get:
+            authority.publish_default_area()
+        get.assert_not_called()
+
+    def test_publication_adapters_reject_shared_objects(self):
+        adapters = {
+            name: {
+                "provider": name,
+                "refs": {"app": {"namespace": "dns", "name": "shared"}},
+            }
+            for name in ("alidns", "dnspod")
+        }
+        with mock.patch.object(authority, "PUBLICATION_ADAPTERS", adapters):
+            with self.assertRaisesRegex(RuntimeError, "is shared by adapters"):
+                authority.validate_publication_adapters()
 
     def test_custom_api_group_is_used_for_status(self):
         authority.CANDIDATES[:] = [{
