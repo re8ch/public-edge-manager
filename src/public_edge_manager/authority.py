@@ -53,8 +53,11 @@ FABRIC_EVIDENCE_RESOURCE = os.getenv("FABRIC_EVIDENCE_RESOURCE", "networkpathass
 FABRIC_EVIDENCE_ALLOWED_STATES = set(json.loads(os.getenv("FABRIC_EVIDENCE_ALLOWED_STATES_JSON", '["Ready","Partial"]')))
 FABRIC_EVIDENCE_MIN_CONFIDENCE = max(0.0, min(1.0, float(os.getenv("FABRIC_EVIDENCE_MIN_CONFIDENCE", "0"))))
 FABRIC_EVIDENCE_WEIGHTS = json.loads(os.getenv("FABRIC_EVIDENCE_WEIGHTS_JSON", "{}"))
+FABRIC_REQUIRE_NODE_READY = os.getenv("FABRIC_REQUIRE_NODE_READY", "true").lower() == "true"
 FABRIC_ASSESSMENTS = {}
 FABRIC_API_AVAILABLE = False
+FABRIC_NODE_READINESS = {}
+FABRIC_NODE_API_AVAILABLE = False
 
 
 def kubernetes_get(path):
@@ -169,11 +172,13 @@ def refresh_candidates():
 
 def refresh_fabric_assessments():
     """Cache provider-neutral network evidence once per probe cycle."""
-    global FABRIC_API_AVAILABLE
+    global FABRIC_API_AVAILABLE, FABRIC_NODE_API_AVAILABLE
     if FABRIC_EVIDENCE_MODE == "Disabled":
         with LOCK:
             FABRIC_ASSESSMENTS.clear()
             FABRIC_API_AVAILABLE = False
+            FABRIC_NODE_READINESS.clear()
+            FABRIC_NODE_API_AVAILABLE = False
         return
     payload = kubernetes_get(
         f"/apis/{FABRIC_EVIDENCE_API_GROUP}/{FABRIC_EVIDENCE_API_VERSION}/{FABRIC_EVIDENCE_RESOURCE}"
@@ -188,10 +193,24 @@ def refresh_fabric_assessments():
         if scope.get("plane") not in ("host-and-pod", "pod"):
             continue
         assessments[subject["name"]] = item
+    node_payload = kubernetes_get("/api/v1/nodes") if FABRIC_REQUIRE_NODE_READY else None
+    node_available = node_payload is not None if FABRIC_REQUIRE_NODE_READY else True
+    node_readiness = {}
+    for item in (node_payload or {}).get("items", []):
+        name = item.get("metadata", {}).get("name")
+        if not name or item.get("metadata", {}).get("deletionTimestamp"):
+            continue
+        node_readiness[name] = any(
+            condition.get("type") == "Ready" and condition.get("status") == "True"
+            for condition in item.get("status", {}).get("conditions", [])
+        )
     with LOCK:
         FABRIC_ASSESSMENTS.clear()
         FABRIC_ASSESSMENTS.update(assessments)
         FABRIC_API_AVAILABLE = available
+        FABRIC_NODE_READINESS.clear()
+        FABRIC_NODE_READINESS.update(node_readiness)
+        FABRIC_NODE_API_AVAILABLE = node_available
 
 
 def parse_timestamp(value):
@@ -209,7 +228,17 @@ def fabric_evidence(candidate, now=None):
         return {"eligible": True, "mode": "Disabled", "state": "Disabled", "score": 0}
     with LOCK:
         available = FABRIC_API_AVAILABLE
-        item = FABRIC_ASSESSMENTS.get(candidate.get("nodeName", ""))
+        node_api_available = FABRIC_NODE_API_AVAILABLE
+        node_name = candidate.get("nodeName", "")
+        node_ready = FABRIC_NODE_READINESS.get(node_name)
+        item = FABRIC_ASSESSMENTS.get(node_name)
+    if FABRIC_REQUIRE_NODE_READY and (not node_api_available or node_ready is not True):
+        reason = "NodeNotReady" if node_api_available and node_ready is False else "NodeReadinessUnavailable"
+        eligible = FABRIC_EVIDENCE_MODE in ("Shadow", "Optional") and not node_api_available
+        return {"eligible": True if FABRIC_EVIDENCE_MODE == "Shadow" else eligible,
+                "wouldReject": True, "mode": FABRIC_EVIDENCE_MODE,
+                "state": "Unavailable", "reason": reason, "nodeReady": node_ready,
+                "score": 0}
     if not item:
         eligible = FABRIC_EVIDENCE_MODE in ("Shadow", "Optional")
         reason = "AssessmentNotFound" if available else "ProviderUnavailable"
@@ -238,6 +267,7 @@ def fabric_evidence(candidate, now=None):
         "eligible": True if FABRIC_EVIDENCE_MODE == "Shadow" else evidence_eligible,
         "wouldReject": not evidence_eligible,
         "mode": FABRIC_EVIDENCE_MODE,
+        "nodeReady": node_ready if FABRIC_REQUIRE_NODE_READY else None,
         "assessment": item.get("metadata", {}).get("name", ""),
         "state": state,
         "reason": reason,

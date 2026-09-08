@@ -38,6 +38,7 @@ fabricEvidence:
   apiGroup: networking.re8ch.com
   apiVersion: v1alpha1
   resource: networkpathassessments
+  requireNodeReady: true
   allowedStates: [Ready, Partial]
   minConfidence: 0.6
   rankingWeights: {optimality: 100, stability: 100, independence: 50}
@@ -50,6 +51,12 @@ node assessment is absent. When a matching assessment exists, it must be fresh,
 carry `EvidenceReady=True`, and use an allowed state. `Required` additionally
 fails closed when the API or assessment is absent. `Disabled` neither reads the
 API nor renders its RBAC permission.
+
+With `requireNodeReady`, the consumer also applies the Kubernetes eligibility
+fact used by Advanced Fabric rankings: absent, deleting, and non-`Ready=True`
+Nodes are excluded. `Required` fails closed if either Nodes or assessments
+cannot be read, preventing a fresh historical NPA from keeping a NotReady edge
+eligible.
 
 Candidates match assessments through `PublicEdge.spec.nodeName` and
 `NetworkPathAssessment.spec.subjectRef` with kind `Node`. Assessment scope must
@@ -65,7 +72,7 @@ all documentation addresses and names, then install the OCI chart:
 ```sh
 helm install public-edge-manager \
   oci://ghcr.io/re8ch/charts/public-edge-manager \
-  --version 0.4.0 \
+  --version 0.4.2 \
   --namespace public-edge-system --create-namespace \
   --values values-production.yaml
 ```

@@ -89,12 +89,13 @@
     ,"fabricEvidence": {
       "type": "object",
       "additionalProperties": false,
-      "required": ["mode", "apiGroup", "apiVersion", "resource", "allowedStates", "minConfidence", "rankingWeights"],
+      "required": ["mode", "apiGroup", "apiVersion", "resource", "requireNodeReady", "allowedStates", "minConfidence", "rankingWeights"],
       "properties": {
         "mode": { "enum": ["Disabled", "Shadow", "Optional", "Required"] },
         "apiGroup": { "type": "string", "pattern": "^[a-z0-9]([-a-z0-9]*[a-z0-9])?(\\.[a-z0-9]([-a-z0-9]*[a-z0-9])?)+$" },
         "apiVersion": { "type": "string", "pattern": "^v[0-9]+((alpha|beta)[0-9]+)?$" },
         "resource": { "type": "string", "pattern": "^[a-z0-9]([-a-z0-9]*[a-z0-9])?$" },
+        "requireNodeReady": { "type": "boolean" },
         "allowedStates": { "type": "array", "minItems": 1, "uniqueItems": true, "items": { "enum": ["Ready", "Partial"] } },
         "minConfidence": { "type": "number", "minimum": 0, "maximum": 1 },
         "rankingWeights": {
