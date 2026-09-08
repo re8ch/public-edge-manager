@@ -70,6 +70,17 @@ class AuthorityTests(unittest.TestCase):
         self.assertFalse(result["eligible"])
         self.assertEqual(result["reason"], "AssessmentNotFound")
 
+    def test_shadow_fabric_evidence_reports_without_gating_or_scoring(self):
+        authority.FABRIC_ASSESSMENTS["edge-node"] = self.assessment(
+            state="Stale", valid_until="2026-09-08T00:00:30Z", condition_status="False"
+        )
+        with mock.patch.object(authority, "FABRIC_EVIDENCE_MODE", "Shadow"), \
+             mock.patch.object(authority, "FABRIC_EVIDENCE_WEIGHTS", {"optimality": 100}):
+            result = authority.fabric_evidence({"nodeName": "edge-node"}, now=1788825700)
+        self.assertTrue(result["eligible"])
+        self.assertTrue(result["wouldReject"])
+        self.assertEqual(result["score"], 0)
+
     def test_matching_stale_assessment_fails_closed(self):
         authority.FABRIC_ASSESSMENTS["edge-node"] = self.assessment(
             valid_until="2026-09-08T00:00:30Z"
