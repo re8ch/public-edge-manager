@@ -17,6 +17,11 @@ rules:
   - apiGroups: [{{ .Values.fabricEvidence.apiGroup | quote }}]
     resources: [{{ .Values.fabricEvidence.resource | quote }}]
     verbs: [get, list, watch]
+  {{- if .Values.fabricEvidence.requireNodeReady }}
+  - apiGroups: [""]
+    resources: [nodes]
+    verbs: [get, list, watch]
+  {{- end }}
   {{- end }}
   - apiGroups: [gateway.networking.k8s.io]
     resources: [gateways, httproutes, tlsroutes]

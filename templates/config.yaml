@@ -26,6 +26,7 @@ data:
   FABRIC_EVIDENCE_ALLOWED_STATES_JSON: {{ .Values.fabricEvidence.allowedStates | toJson | quote }}
   FABRIC_EVIDENCE_MIN_CONFIDENCE: {{ .Values.fabricEvidence.minConfidence | quote }}
   FABRIC_EVIDENCE_WEIGHTS_JSON: {{ .Values.fabricEvidence.rankingWeights | toJson | quote }}
+  FABRIC_REQUIRE_NODE_READY: {{ .Values.fabricEvidence.requireNodeReady | quote }}
 {{- $bind := dict -}}{{- $regions := dict -}}{{- $areas := dict -}}
 {{- range $node, $v := .Values.authorityNodes -}}
 {{- $_ := set $bind $node $v.bindAddress -}}{{- $_ := set $regions $node $v.region -}}{{- $_ := set $areas $node $v.area -}}

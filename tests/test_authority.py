@@ -20,7 +20,10 @@ class AuthorityTests(unittest.TestCase):
         authority.CANDIDATES[:] = []
         authority.FABRIC_ASSESSMENTS.clear()
         authority.FABRIC_API_AVAILABLE = False
+        authority.FABRIC_NODE_READINESS.clear()
+        authority.FABRIC_NODE_API_AVAILABLE = False
         authority.FABRIC_EVIDENCE_MODE = "Disabled"
+        authority.FABRIC_REQUIRE_NODE_READY = False
         authority.FABRIC_EVIDENCE_ALLOWED_STATES = {"Ready", "Partial"}
         authority.FABRIC_EVIDENCE_MIN_CONFIDENCE = 0
         authority.FABRIC_EVIDENCE_WEIGHTS = {}
@@ -56,6 +59,40 @@ class AuthorityTests(unittest.TestCase):
             authority.refresh_fabric_assessments()
         self.assertTrue(authority.FABRIC_API_AVAILABLE)
         self.assertEqual(set(authority.FABRIC_ASSESSMENTS), {"edge-node"})
+
+    def test_refresh_fabric_assessments_caches_exact_node_ready_condition(self):
+        responses = [
+            {"items": [self.assessment()]},
+            {"items": [{"metadata": {"name": "edge-node"}, "status": {"conditions": [
+                {"type": "Ready", "status": "False"},
+            ]}}]},
+        ]
+        with mock.patch.object(authority, "FABRIC_EVIDENCE_MODE", "Required"), \
+             mock.patch.object(authority, "FABRIC_REQUIRE_NODE_READY", True), \
+             mock.patch.object(authority, "kubernetes_get", side_effect=responses):
+            authority.refresh_fabric_assessments()
+        self.assertTrue(authority.FABRIC_NODE_API_AVAILABLE)
+        self.assertFalse(authority.FABRIC_NODE_READINESS["edge-node"])
+
+    def test_required_evidence_rejects_not_ready_node_even_with_fresh_npa(self):
+        authority.FABRIC_ASSESSMENTS["edge-node"] = self.assessment()
+        authority.FABRIC_NODE_READINESS["edge-node"] = False
+        with mock.patch.object(authority, "FABRIC_EVIDENCE_MODE", "Required"), \
+             mock.patch.object(authority, "FABRIC_REQUIRE_NODE_READY", True), \
+             mock.patch.object(authority, "FABRIC_API_AVAILABLE", True), \
+             mock.patch.object(authority, "FABRIC_NODE_API_AVAILABLE", True):
+            result = authority.fabric_evidence({"nodeName": "edge-node"})
+        self.assertFalse(result["eligible"])
+        self.assertEqual(result["reason"], "NodeNotReady")
+
+    def test_required_evidence_fails_closed_when_node_readiness_is_unavailable(self):
+        authority.FABRIC_ASSESSMENTS["edge-node"] = self.assessment()
+        with mock.patch.object(authority, "FABRIC_EVIDENCE_MODE", "Required"), \
+             mock.patch.object(authority, "FABRIC_REQUIRE_NODE_READY", True), \
+             mock.patch.object(authority, "FABRIC_NODE_API_AVAILABLE", False):
+            result = authority.fabric_evidence({"nodeName": "edge-node"})
+        self.assertFalse(result["eligible"])
+        self.assertEqual(result["reason"], "NodeReadinessUnavailable")
 
     def test_optional_fabric_evidence_allows_absent_provider(self):
         with mock.patch.object(authority, "FABRIC_EVIDENCE_MODE", "Optional"):
