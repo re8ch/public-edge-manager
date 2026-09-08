@@ -11,6 +11,7 @@ import threading
 import time
 import urllib.parse
 import urllib.request
+from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timezone
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
@@ -18,6 +19,7 @@ NODE = os.getenv("NODE_NAME", "unknown")
 PROBE_CONNECT_TIMEOUT = float(os.getenv("PROBE_CONNECT_TIMEOUT_SECONDS", "5"))
 PROBE_RESPONSE_TIMEOUT = float(os.getenv("PROBE_RESPONSE_TIMEOUT_SECONDS", "12"))
 PROBE_INTERVAL_SECONDS = max(1, int(os.getenv("PROBE_INTERVAL_SECONDS", "3")))
+PROBE_MAX_WORKERS = max(1, int(os.getenv("PROBE_MAX_WORKERS", "8")))
 HTTP_PORT = int(os.getenv("HTTP_PORT", "8080"))
 DNS_PORT = int(os.getenv("DNS_PORT", "53"))
 NAMESERVERS = os.getenv("NAMESERVERS", "").split()
@@ -350,14 +352,24 @@ def probe(candidate, service, url):
 def probe_all():
     refresh_candidates()
     refresh_fabric_assessments()
-    threads = []
-    for candidate in CANDIDATES:
-        for service, url in candidate.get("probes", {}).items():
-            thread = threading.Thread(target=probe, args=(candidate, service, url), daemon=True)
-            thread.start()
-            threads.append(thread)
-    for thread in threads:
-        thread.join(timeout=PROBE_CONNECT_TIMEOUT + PROBE_RESPONSE_TIMEOUT + 2)
+    jobs = [
+        (candidate, service, url)
+        for candidate in CANDIDATES
+        for service, url in candidate.get("probes", {}).items()
+    ]
+    # A release may expose dozens of services. Creating one thread per
+    # candidate/service pair can exhaust a small CPU quota and starve the HTTP
+    # health endpoint. A per-round bounded pool preserves parallel endpoint
+    # sampling while ensuring a new round cannot overlap unfinished probes.
+    with ThreadPoolExecutor(max_workers=min(PROBE_MAX_WORKERS, len(jobs) or 1),
+                            thread_name_prefix="edge-probe") as executor:
+        futures = [executor.submit(probe, candidate, service, url)
+                   for candidate, service, url in jobs]
+        for future in futures:
+            try:
+                future.result()
+            except Exception as exc:
+                print(f"probe_worker error={exc}", flush=True)
 
 
 def probe_loop():
@@ -633,7 +645,10 @@ class HTTPHandler(BaseHTTPRequestHandler):
         if parsed.path == "/healthz":
             self.send_response(200)
             self.end_headers()
-            self.wfile.write(b"ok\n")
+            try:
+                self.wfile.write(b"ok\n")
+            except (BrokenPipeError, ConnectionResetError):
+                pass
             return
         if parsed.path != "/v1/discovery":
             self.send_error(404)

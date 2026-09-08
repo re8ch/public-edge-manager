@@ -166,6 +166,43 @@ class AuthorityTests(unittest.TestCase):
             authority.kubernetes_get = original
         self.assertEqual(candidates[0]["probes"]["app"], "https://app.example.com/healthz")
 
+    def test_probe_all_bounds_parallel_workers(self):
+        authority.CANDIDATES[:] = [{
+            "id": "edge-a", "probes": {
+                f"service-{index}": f"https://service-{index}.example.com/healthz"
+                for index in range(20)
+            },
+        }]
+        submitted = []
+
+        class Future:
+            def result(self):
+                return None
+
+        class Executor:
+            def __init__(self, max_workers, **_kwargs):
+                self.max_workers = max_workers
+
+            def __enter__(self):
+                submitted.append(("workers", self.max_workers))
+                return self
+
+            def __exit__(self, *_args):
+                return False
+
+            def submit(self, function, *args):
+                submitted.append((function, args))
+                return Future()
+
+        with mock.patch.object(authority, "refresh_candidates"), \
+             mock.patch.object(authority, "refresh_fabric_assessments"), \
+             mock.patch.object(authority, "ThreadPoolExecutor", Executor), \
+             mock.patch.object(authority, "PROBE_MAX_WORKERS", 6):
+            authority.probe_all()
+
+        self.assertEqual(submitted[0], ("workers", 6))
+        self.assertEqual(len(submitted) - 1, 20)
+
     def test_dns_fails_closed_without_ready_edge(self):
         query = b"\x12\x34\x01\x00\x00\x01\x00\x00\x00\x00\x00\x00" + authority.encode_name("app.example.com.") + struct.pack("!HH", 1, 1)
         response = authority.dns_response(query)

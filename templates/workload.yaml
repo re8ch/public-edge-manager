@@ -41,6 +41,7 @@ spec:
             - {name: PROBE_CONNECT_TIMEOUT_SECONDS, value: {{ .Values.probe.connectTimeoutSeconds | quote }}}
             - {name: PROBE_RESPONSE_TIMEOUT_SECONDS, value: {{ .Values.probe.responseTimeoutSeconds | quote }}}
             - {name: PROBE_INTERVAL_SECONDS, value: {{ .Values.probe.intervalSeconds | quote }}}
+            - {name: PROBE_MAX_WORKERS, value: {{ .Values.probe.maxWorkers | quote }}}
           ports:
             - {name: dns-udp, containerPort: {{ .Values.workload.dnsPort }}, protocol: UDP}
             - {name: dns-tcp, containerPort: {{ .Values.workload.dnsPort }}, protocol: TCP}

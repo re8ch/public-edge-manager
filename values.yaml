@@ -1,6 +1,6 @@
 image:
   repository: ghcr.io/re8ch/public-edge-manager
-  tag: "0.4.4"
+  tag: "0.4.5"
   digest: ""
   pullPolicy: IfNotPresent
 
@@ -38,6 +38,8 @@ probe:
   connectTimeoutSeconds: 5
   responseTimeoutSeconds: 12
   intervalSeconds: 3
+  # Bounds candidate/service TLS sampling so probes cannot starve health checks.
+  maxWorkers: 8
   userAgent: public-edge-manager/0.4
 
 dns:
