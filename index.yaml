@@ -12,6 +12,49 @@ entries:
           description: Expose probe.maxWorkers for installations with different service counts and CPU budgets.
       artifacthub.io/images: |
         - name: public-edge-manager
+          image: ghcr.io/re8ch/public-edge-manager:0.5.1
+          platforms:
+            - linux/amd64
+            - linux/arm64
+      artifacthub.io/license: Apache-2.0
+      artifacthub.io/links: |
+        - name: source
+          url: https://github.com/re8ch/public-edge-manager
+        - name: support
+          url: https://github.com/re8ch/public-edge-manager/issues
+    apiVersion: v2
+    appVersion: 0.5.1
+    created: "2026-09-09T05:38:26.772670355Z"
+    description: Region- and capacity-aware PublicEdge health authority for Kubernetes.
+    digest: 365a083a8403206c2bedd0fda79d8464a966914e118bf6c928518beb1678c6ab
+    home: https://github.com/re8ch/public-edge-manager
+    keywords:
+    - public-edge
+    - dns
+    - external-dns
+    - gateway-api
+    - cilium
+    - geo-routing
+    maintainers:
+    - name: RE8CH Platform
+    name: public-edge-manager
+    sources:
+    - https://github.com/re8ch/public-edge-manager
+    type: application
+    urls:
+    - https://github.com/re8ch/public-edge-manager/releases/download/v0.5.1/public-edge-manager-0.5.1.tgz
+    version: 0.5.1
+  - annotations:
+      artifacthub.io/category: networking
+      artifacthub.io/changes: |
+        - kind: changed
+          description: Consume NetworkPathAssessment v1alpha2 strictly as a freshness, readiness and reachability eligibility gate; remove O/S/I ranking weights.
+        - kind: fixed
+          description: Bound concurrent endpoint sampling so probe load cannot starve health and discovery requests.
+        - kind: added
+          description: Expose probe.maxWorkers for installations with different service counts and CPU budgets.
+      artifacthub.io/images: |
+        - name: public-edge-manager
           image: ghcr.io/re8ch/public-edge-manager:0.5.0
           platforms:
             - linux/amd64
@@ -193,4 +236,4 @@ entries:
     urls:
     - https://re8ch.github.io/public-edge-manager/public-edge-manager-0.2.0.tgz
     version: 0.2.0
-generated: "2026-09-09T04:53:24.872875795Z"
+generated: "2026-09-09T05:38:26.771847309Z"
