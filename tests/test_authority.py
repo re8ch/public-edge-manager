@@ -25,8 +25,6 @@ class AuthorityTests(unittest.TestCase):
         authority.FABRIC_EVIDENCE_MODE = "Disabled"
         authority.FABRIC_REQUIRE_NODE_READY = False
         authority.FABRIC_EVIDENCE_ALLOWED_STATES = {"Ready", "Partial"}
-        authority.FABRIC_EVIDENCE_MIN_CONFIDENCE = 0
-        authority.FABRIC_EVIDENCE_WEIGHTS = {}
 
     @staticmethod
     def assessment(node="edge-node", state="Ready", valid_until="2099-01-01T00:00:00Z",
@@ -41,8 +39,9 @@ class AuthorityTests(unittest.TestCase):
                 "state": state,
                 "observedAt": "2026-09-08T00:00:00Z",
                 "validUntil": valid_until,
-                "dimensions": {"optimality": .8, "stability": .7, "independence": None},
-                "confidence": {"optimality": .9, "stability": .8, "independence": 0},
+                "nodeReady": True,
+                "pathEvidence": {"currentPathMeasured": True, "reachable": True,
+                                 "viableAlternatives": 1, "freshPlanes": ["host", "pod"]},
                 "conditions": [{"type": "EvidenceReady", "status": condition_status,
                                 "reason": "AllDimensionsAvailable"}],
             },
@@ -111,12 +110,11 @@ class AuthorityTests(unittest.TestCase):
         authority.FABRIC_ASSESSMENTS["edge-node"] = self.assessment(
             state="Stale", valid_until="2026-09-08T00:00:30Z", condition_status="False"
         )
-        with mock.patch.object(authority, "FABRIC_EVIDENCE_MODE", "Shadow"), \
-             mock.patch.object(authority, "FABRIC_EVIDENCE_WEIGHTS", {"optimality": 100}):
+        with mock.patch.object(authority, "FABRIC_EVIDENCE_MODE", "Shadow"):
             result = authority.fabric_evidence({"nodeName": "edge-node"}, now=1788825700)
         self.assertTrue(result["eligible"])
         self.assertTrue(result["wouldReject"])
-        self.assertEqual(result["score"], 0)
+        self.assertNotIn("score", result)
 
     def test_matching_stale_assessment_fails_closed(self):
         authority.FABRIC_ASSESSMENTS["edge-node"] = self.assessment(
@@ -127,15 +125,21 @@ class AuthorityTests(unittest.TestCase):
         self.assertFalse(result["eligible"])
         self.assertEqual(result["reason"], "EvidenceExpired")
 
-    def test_fresh_assessment_contributes_only_confident_dimensions(self):
+    def test_fresh_assessment_is_only_an_eligibility_gate(self):
         authority.FABRIC_ASSESSMENTS["edge-node"] = self.assessment()
-        with mock.patch.object(authority, "FABRIC_EVIDENCE_MODE", "Required"), \
-             mock.patch.object(authority, "FABRIC_EVIDENCE_MIN_CONFIDENCE", .85), \
-             mock.patch.object(authority, "FABRIC_EVIDENCE_WEIGHTS",
-                               {"optimality": 100, "stability": 100, "independence": 100}):
+        with mock.patch.object(authority, "FABRIC_EVIDENCE_MODE", "Required"):
             result = authority.fabric_evidence({"nodeName": "edge-node"}, now=1788825600)
         self.assertTrue(result["eligible"])
-        self.assertEqual(result["score"], 80)
+        self.assertNotIn("score", result)
+        self.assertTrue(result["pathEvidence"]["reachable"])
+
+    def test_required_rejects_unexecuted_current_path(self):
+        assessment = self.assessment()
+        assessment["status"]["pathEvidence"]["currentPathMeasured"] = False
+        authority.FABRIC_ASSESSMENTS["edge-node"] = assessment
+        with mock.patch.object(authority, "FABRIC_EVIDENCE_MODE", "Required"):
+            result = authority.fabric_evidence({"nodeName": "edge-node"}, now=1788825600)
+        self.assertFalse(result["eligible"])
 
     def test_disabled_and_draining_edges_are_not_candidates(self):
         payload = {"items": [
