@@ -16,9 +16,9 @@ does not require code or ConfigMaps from a separate private repository.
 2. A healthy edge in the authority replica's configured area beats a remote edge.
 3. Capacity, priority, application latency, and a small node-local preference
    provide deterministic ordering inside an area.
-4. Optional provider-neutral `NetworkPathAssessment` evidence can exclude a
-   candidate whose evidence is stale or unusable and contribute
-   confidence-bounded O/S/I ranking signals.
+4. Optional provider-neutral `NetworkPathAssessment/v1alpha2` evidence excludes
+   candidates whose node, freshness, executed-path or reachability evidence is
+   unusable. It is an eligibility gate and never contributes a ranking score.
 5. DNS A or CNAME answers publish the best equally scored candidates.
 6. Optional named publication adapters update provider-scoped ExternalDNS-only
    Ingresses with the selected edge.
@@ -36,19 +36,18 @@ implementation. The built-in defaults keep this integration disabled:
 fabricEvidence:
   mode: Optional
   apiGroup: networking.re8ch.com
-  apiVersion: v1alpha1
+  apiVersion: v1alpha2
   resource: networkpathassessments
   requireNodeReady: true
   allowedStates: [Ready, Partial]
-  minConfidence: 0.6
-  rankingWeights: {optimality: 100, stability: 100, independence: 50}
 ```
 
 `Shadow` reads and reports evidence without changing eligibility or ranking and
 is suitable for an initial observation window. `Optional` preserves probe-only
 operation when the provider API or matching
 node assessment is absent. When a matching assessment exists, it must be fresh,
-carry `EvidenceReady=True`, and use an allowed state. `Required` additionally
+report a Ready node and an executed reachable current path, carry
+`EvidenceReady=True`, and use an allowed state. `Required` additionally
 fails closed when the API or assessment is absent. `Disabled` neither reads the
 API nor renders its RBAC permission.
 

@@ -50,11 +50,9 @@ CANDIDATE_LATENCY_PENALTY_CAP = max(0, int(os.getenv("CANDIDATE_LATENCY_PENALTY_
 CANDIDATE_LOCAL_NODE_BONUS = max(0, int(os.getenv("CANDIDATE_LOCAL_NODE_BONUS", "5")))
 FABRIC_EVIDENCE_MODE = os.getenv("FABRIC_EVIDENCE_MODE", "Disabled")
 FABRIC_EVIDENCE_API_GROUP = os.getenv("FABRIC_EVIDENCE_API_GROUP", "networking.re8ch.com")
-FABRIC_EVIDENCE_API_VERSION = os.getenv("FABRIC_EVIDENCE_API_VERSION", "v1alpha1")
+FABRIC_EVIDENCE_API_VERSION = os.getenv("FABRIC_EVIDENCE_API_VERSION", "v1alpha2")
 FABRIC_EVIDENCE_RESOURCE = os.getenv("FABRIC_EVIDENCE_RESOURCE", "networkpathassessments")
 FABRIC_EVIDENCE_ALLOWED_STATES = set(json.loads(os.getenv("FABRIC_EVIDENCE_ALLOWED_STATES_JSON", '["Ready","Partial"]')))
-FABRIC_EVIDENCE_MIN_CONFIDENCE = max(0.0, min(1.0, float(os.getenv("FABRIC_EVIDENCE_MIN_CONFIDENCE", "0"))))
-FABRIC_EVIDENCE_WEIGHTS = json.loads(os.getenv("FABRIC_EVIDENCE_WEIGHTS_JSON", "{}"))
 FABRIC_REQUIRE_NODE_READY = os.getenv("FABRIC_REQUIRE_NODE_READY", "true").lower() == "true"
 FABRIC_ASSESSMENTS = {}
 FABRIC_API_AVAILABLE = False
@@ -227,7 +225,7 @@ def parse_timestamp(value):
 def fabric_evidence(candidate, now=None):
     """Evaluate cached evidence without assuming an Advanced Fabric release."""
     if FABRIC_EVIDENCE_MODE == "Disabled":
-        return {"eligible": True, "mode": "Disabled", "state": "Disabled", "score": 0}
+        return {"eligible": True, "mode": "Disabled", "state": "Disabled"}
     with LOCK:
         available = FABRIC_API_AVAILABLE
         node_api_available = FABRIC_NODE_API_AVAILABLE
@@ -240,12 +238,12 @@ def fabric_evidence(candidate, now=None):
         return {"eligible": True if FABRIC_EVIDENCE_MODE == "Shadow" else eligible,
                 "wouldReject": True, "mode": FABRIC_EVIDENCE_MODE,
                 "state": "Unavailable", "reason": reason, "nodeReady": node_ready,
-                "score": 0}
+                "pathEvidence": {}}
     if not item:
         eligible = FABRIC_EVIDENCE_MODE in ("Shadow", "Optional")
         reason = "AssessmentNotFound" if available else "ProviderUnavailable"
         return {"eligible": eligible, "mode": FABRIC_EVIDENCE_MODE,
-                "state": "Unavailable", "reason": reason, "score": 0}
+                "state": "Unavailable", "reason": reason, "pathEvidence": {}}
     status = item.get("status", {})
     state = status.get("state", "Unknown")
     valid_until = parse_timestamp(status.get("validUntil"))
@@ -254,15 +252,11 @@ def fabric_evidence(candidate, now=None):
                       if value.get("type") == "EvidenceReady"), {})
     reason = condition.get("reason", state)
     fresh = valid_until is not None and current <= valid_until
-    evidence_eligible = fresh and state in FABRIC_EVIDENCE_ALLOWED_STATES and condition.get("status") == "True"
-    dimensions = status.get("dimensions", {})
-    confidence = status.get("confidence", {})
-    score = 0
-    for dimension, weight in FABRIC_EVIDENCE_WEIGHTS.items():
-        value = dimensions.get(dimension)
-        if value is None or float(confidence.get(dimension, 0)) < FABRIC_EVIDENCE_MIN_CONFIDENCE:
-            continue
-        score += int(float(value) * int(weight))
+    path_evidence = status.get("pathEvidence", {})
+    evidence_eligible = (fresh and state in FABRIC_EVIDENCE_ALLOWED_STATES and
+                         condition.get("status") == "True" and status.get("nodeReady") is True and
+                         path_evidence.get("currentPathMeasured") is True and
+                         path_evidence.get("reachable") is True)
     if not fresh:
         reason = "EvidenceExpired" if valid_until is not None else "ValidityMissing"
     return {
@@ -275,7 +269,7 @@ def fabric_evidence(candidate, now=None):
         "reason": reason,
         "observedAt": status.get("observedAt", ""),
         "validUntil": status.get("validUntil", ""),
-        "score": score if evidence_eligible and FABRIC_EVIDENCE_MODE != "Shadow" else 0,
+        "pathEvidence": path_evidence,
     }
 
 
@@ -516,7 +510,6 @@ def ranked(service):
             score -= min(int(observed.get("latencyMs", 0)) // CANDIDATE_LATENCY_DIVISOR_MS, CANDIDATE_LATENCY_PENALTY_CAP)
             if candidate["id"] == NODE:
                 score += CANDIDATE_LOCAL_NODE_BONUS
-            score += network_evidence["score"]
         result.append({
             "id": candidate["id"], "region": candidate["region"],
             "area": candidate.get("area", candidate["region"]), "ip": candidate["ip"],
