@@ -268,6 +268,7 @@ class AuthorityTests(unittest.TestCase):
         self.assertEqual(path, "/apis/networking.re8ch.com/v1alpha1/publicedges/edge-a/status")
         self.assertEqual(payload["status"]["conditions"][0]["status"], "False")
         self.assertEqual(payload["status"]["services"]["app"]["statusCode"], 404)
+        self.assertIsNone(payload["status"]["networkEvidence"]["score"])
 
     def test_legacy_publication_is_disabled_by_default(self):
         with mock.patch.object(authority, "PUBLICATION_ENABLED", False), \
