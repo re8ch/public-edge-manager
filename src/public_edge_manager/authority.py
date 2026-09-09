@@ -397,6 +397,10 @@ def publish_edge_statuses():
         }
         ready_services = sorted(name for name, result in service_health.items() if result["ready"])
         network_evidence = fabric_evidence(candidate)
+        # A merge-patch does not remove keys omitted by a newer publisher. Send
+        # an explicit null once so v0.4's legacy O/S/I-derived score cannot be
+        # mistaken for part of the v1alpha2 eligibility contract.
+        network_evidence["score"] = None
         ready = bool(ready_services) and network_evidence["eligible"]
         condition = {
             "type": "Ready",
